@@ -14,11 +14,16 @@ allowBuilds:
   '@parcel/watcher': false
   '@reown/appkit': false
   '@sentry/cli': true
+  '@stellar/stellar-sdk': set this to true or false
   '@swc/core': true
+  blake-hash: set this to true or false
   bufferutil: false
   esbuild: true
   keccak: false
+  protobufjs: set this to true or false
   sharp: false
+  tiny-secp256k1: set this to true or false
+  usb: set this to true or false
   utf-8-validate: false
 
 overrides:
