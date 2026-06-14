@@ -10,6 +10,7 @@ import { customSession, siwe, twoFactor } from 'better-auth/plugins'
 import { createPublicClient, http } from 'viem'
 import { isAdminWallet } from '@/lib/admin'
 import { AffiliateRepository } from '@/lib/db/queries/affiliate'
+import { isSolanaAddress, verifySignInSignature } from '@/lib/solana/auth'
 import { db } from '@/lib/drizzle'
 import { reownProjectId } from '@/lib/reown-project-id'
 import resolveSiteUrl from '@/lib/site-url'
@@ -260,6 +261,11 @@ export const auth = betterAuth({
       anonymous: true,
       getNonce: async () => generateRandomString(32),
       verifyMessage: async ({ message, signature, address }) => {
+        // Solana (SIWS): base58 ed25519 pubkey rather than an 0x EVM address.
+        if (isSolanaAddress(address)) {
+          return verifySignInSignature({ message, signature, address })
+        }
+
         const chainId = getChainIdFromMessage(message)
 
         const publicClient = createPublicClient(

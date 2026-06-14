@@ -25,13 +25,15 @@ export const conditions = pgTable(
     question_id: text().notNull(),
     resolved: boolean().default(false),
     metadata_hash: text(),
-    creator: char('creator', { length: 42 }),
-    uma_request_tx_hash: char('uma_request_tx_hash', { length: 66 }),
+    // Widened from char(42)/char(66) to text to hold base58 Solana pubkeys and
+    // transaction signatures (EVM addresses/hashes still fit).
+    creator: text('creator'),
+    uma_request_tx_hash: text('uma_request_tx_hash'),
     uma_request_log_index: integer('uma_request_log_index'),
-    uma_oracle_address: char('uma_oracle_address', { length: 42 }),
-    mirror_uma_request_tx_hash: char('mirror_uma_request_tx_hash', { length: 66 }),
+    uma_oracle_address: text('uma_oracle_address'),
+    mirror_uma_request_tx_hash: text('mirror_uma_request_tx_hash'),
     mirror_uma_request_log_index: integer('mirror_uma_request_log_index'),
-    mirror_uma_oracle_address: char('mirror_uma_oracle_address', { length: 42 }),
+    mirror_uma_oracle_address: text('mirror_uma_oracle_address'),
     resolution_status: text(),
     resolution_flagged: boolean(),
     resolution_paused: boolean(),
@@ -72,7 +74,8 @@ export const events = pgTable(
       .unique(),
     title: text()
       .notNull(),
-    creator: char({ length: 42 }),
+    // Widened from char(42): holds base58 Solana pubkeys or 0x EVM addresses.
+    creator: text(),
     icon_url: text(),
     is_hidden: boolean()
       .notNull()
@@ -197,7 +200,8 @@ export const event_creations = pgTable(
     start_at: timestamp({ withTimezone: true }),
     deploy_at: timestamp({ withTimezone: true }),
     end_date: timestamp({ withTimezone: true }),
-    wallet_address: char({ length: 42 }),
+    // Widened from char(42): base58 Solana pubkey or 0x EVM address.
+    wallet_address: text(),
     draft_payload: jsonb().$type<Record<string, unknown> | null>(),
     asset_payload: jsonb().$type<Record<string, unknown> | null>(),
     main_category_slug: text(),
@@ -261,7 +265,8 @@ export const markets = pgTable(
     market_rules: text(),
     resolution_source: text(),
     resolution_source_url: text(),
-    resolver: char({ length: 42 }),
+    // Widened from char(42): base58 Solana pubkey or 0x EVM address.
+    resolver: text(),
     neg_risk: boolean().default(false).notNull(),
     neg_risk_other: boolean().default(false).notNull(),
     neg_risk_market_id: char({ length: 66 }),
