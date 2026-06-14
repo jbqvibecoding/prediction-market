@@ -9,6 +9,7 @@ import { nextCookies } from 'better-auth/next-js'
 import { customSession, siwe, twoFactor } from 'better-auth/plugins'
 import { createPublicClient, http } from 'viem'
 import { isAdminWallet } from '@/lib/admin'
+import { siws } from '@/lib/auth/siws'
 import { AffiliateRepository } from '@/lib/db/queries/affiliate'
 import { isSolanaAddress, verifySignInSignature } from '@/lib/solana/auth'
 import { db } from '@/lib/drizzle'
@@ -283,6 +284,9 @@ export const auth = betterAuth({
         })
       },
     }),
+    // Sign-In With Solana — base58-aware companion to the EVM-only siwe plugin.
+    // Reuses the walletAddress model the siwe plugin registers above.
+    siws({ domain: SIWE_DOMAIN, emailDomainName: SIWE_EMAIL_DOMAIN }),
     siweTwoFactorRedirect(),
     twoFactor({
       allowPasswordless: true,

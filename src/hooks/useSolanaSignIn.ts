@@ -2,35 +2,8 @@
 
 import { useCallback, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
+import { authClient } from '@/lib/auth-client'
 import { runSiwsHandshake } from '@/lib/solana/sign-in'
-
-/** Server contract the SIWS routes must satisfy (see decision note in chat). */
-async function fetchNonce(address: string): Promise<string> {
-  const res = await fetch('/api/auth/siws/nonce', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ address }),
-  })
-  if (!res.ok) throw new Error('failed to fetch sign-in nonce')
-  const body = (await res.json()) as { nonce?: string }
-  if (!body.nonce) throw new Error('nonce missing from response')
-  return body.nonce
-}
-
-async function verifySignIn(args: {
-  message: string
-  signature: string
-  address: string
-}): Promise<boolean> {
-  const res = await fetch('/api/auth/siws/verify', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(args),
-  })
-  if (!res.ok) return false
-  const body = (await res.json()) as { success?: boolean }
-  return Boolean(body.success)
-}
 
 export interface UseSolanaSignIn {
   signIn: () => Promise<boolean>
@@ -41,8 +14,9 @@ export interface UseSolanaSignIn {
 
 /**
  * Sign-In With Solana — the replacement for Kuest's AppKit SIWE flow. Drives the
- * connected wallet through the nonce -> sign -> verify handshake. Requires the
- * server-side SIWS routes (better-auth's built-in siwe plugin is EVM-only).
+ * connected wallet through the nonce -> sign -> verify handshake against the
+ * SIWS better-auth plugin (authClient.siws). On success the '/siws/verify' atom
+ * listener refreshes the better-auth session.
  */
 export function useSolanaSignIn(): UseSolanaSignIn {
   const { publicKey, signMessage } = useWallet()
@@ -61,9 +35,18 @@ export function useSolanaSignIn(): UseSolanaSignIn {
         domain: window.location.host,
         uri: window.location.origin,
         statement: 'Sign in to Kuest',
-        getNonce: fetchNonce,
+        getNonce: async (address) => {
+          const { data, error: nonceError } = await authClient.siws.nonce({ address })
+          if (nonceError || !data?.nonce) {
+            throw new Error(nonceError?.message ?? 'failed to fetch sign-in nonce')
+          }
+          return data.nonce
+        },
         signMessage,
-        verify: verifySignIn,
+        verify: async ({ message, signature, address }) => {
+          const { data } = await authClient.siws.verify({ message, signature, address })
+          return Boolean(data?.success)
+        },
       })
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e))
