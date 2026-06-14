@@ -51,6 +51,7 @@ import { useCurrentTimestamp } from '@/hooks/useCurrentTimestamp'
 import { useHasHydrated } from '@/hooks/useHasHydrated'
 import { useOutcomeLabel } from '@/hooks/useOutcomeLabel'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
+import { useSolanaClob } from '@/hooks/useSolanaClob'
 import { addressToBuilderCode } from '@/lib/builder-code'
 import { CLOB_ORDER_TYPE, getExchangeEip712Domain, ORDER_SIDE, ORDER_TYPE, OUTCOME_INDEX } from '@/lib/constants'
 import { resolveEventPagePath } from '@/lib/events-routing'
@@ -67,10 +68,10 @@ import {
   updateQueryDataWhere,
 } from '@/lib/optimistic-trading'
 import { calculateMarketFill, normalizeBookLevels } from '@/lib/order-panel-utils'
-import { buildOrderPayload, submitOrder } from '@/lib/orders'
 import { resolveOrderExpirationTimestamp } from '@/lib/orders/expiration'
-import { signOrderPayload } from '@/lib/orders/signing'
 import { MIN_LIMIT_ORDER_SHARES, validateOrder } from '@/lib/orders/validation'
+import { SIDE_BUY, SIDE_SELL } from '@/lib/solana/order'
+import { centsToPriceMicro, sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
 import { isUserRejectedRequestError, normalizeAddress } from '@/lib/wallet'
@@ -812,6 +813,7 @@ export default function EventOrderPanelForm({
   const { open } = useAppKit()
   const { isConnected } = useAppKitAccount()
   const { signTypedDataAsync } = useSignTypedData()
+  const { placeOrder: placeSolanaOrder } = useSolanaClob()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const t = useExtracted()
   const locale = useLocale()
@@ -1328,18 +1330,6 @@ export default function EventOrderPanelForm({
       return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
     })()
 
-    const payload = buildOrderPayload({
-      makerAddress,
-      outcome: activeOutcome,
-      side: state.side,
-      orderType: state.type,
-      amount: effectiveAmountForOrder,
-      limitPrice: state.limitPrice,
-      limitShares: state.limitShares,
-      marketPriceCents: marketLimitPriceCents,
-      builder: builderCode,
-      expirationTimestamp: orderExpirationTimestamp ?? undefined,
-    })
     const submittedSide = state.side
     const submittedIsLimitOrder = state.type === ORDER_TYPE.LIMIT
     const submittedAmountInput = state.amount
@@ -1384,45 +1374,29 @@ export default function EventOrderPanelForm({
     const submittedOutcomeIndex = activeOutcome.outcome_index
     const submittedLastMouseEvent = state.lastMouseEvent
 
-    let signature: string
-    try {
-      signature = await runWithSignaturePrompt(() => signOrderPayload({
-        payload,
-        domain: orderDomain,
-        signTypedDataAsync,
-      }))
-    }
-    catch (error) {
-      if (isUserRejectedRequestError(error)) {
-        handleOrderCancelledFeedback()
-        return
-      }
+    const orderPriceCents = submittedIsLimitOrder
+      ? (Number.parseFloat(state.limitPrice || '0') || 0)
+      : (marketLimitPriceCents ?? 0)
+    const orderSharesHuman = submittedSide === ORDER_SIDE.SELL
+      ? (Number.parseFloat((submittedIsLimitOrder ? state.limitShares : effectiveAmountForOrder) || '0') || 0)
+      : submittedBuySharesValue
 
-      handleOrderErrorFeedback(t('Trade failed'), t('We could not sign your order. Please try again.'))
+    if (!(orderPriceCents > 0) || !(orderSharesHuman > 0)) {
+      handleOrderErrorFeedback(t('Trade failed'), t('Enter a valid price and size.'))
       return
     }
 
     state.setIsLoading(true)
     try {
-      const result = await submitOrder({
-        order: payload,
-        signature,
-        orderType: state.type,
-        clobOrderType: state.type === ORDER_TYPE.LIMIT && hasExpirationLimit
-          ? CLOB_ORDER_TYPE.GTD
-          : undefined,
-        conditionId: activeMarket.condition_id,
-        slug: event.slug,
-      })
-
-      if (result?.error) {
-        if (isTradingAuthRequiredError(result.error)) {
-          openTradeRequirements({ forceTradingAuth: true })
-          return
-        }
-        handleOrderErrorFeedback(t('Trade failed'), result.error)
-        return
-      }
+      // Solana CLOB: build + wallet-sign + submit to the matching engine.
+      const result = await runWithSignaturePrompt(() => placeSolanaOrder({
+        market: activeMarket.condition_id,
+        outcome: submittedOutcomeIndex,
+        side: submittedSide === ORDER_SIDE.SELL ? SIDE_SELL : SIDE_BUY,
+        priceMicro: centsToPriceMicro(orderPriceCents),
+        shares: sharesToBaseUnits(orderSharesHuman),
+        expiration: orderExpirationTimestamp ? BigInt(orderExpirationTimestamp) : undefined,
+      }))
 
       if (user?.settings?.notifications?.inapp_order_fills) {
         const isSell = submittedSide === ORDER_SIDE.SELL
@@ -1536,7 +1510,7 @@ export default function EventOrderPanelForm({
         const limitPriceValue = (Number.parseFloat(state.limitPrice || '0') || 0) / 100
         const limitSharesValue = Number.parseFloat(state.limitShares || '0') || 0
         const totalValue = limitPriceValue * limitSharesValue
-        const orderId = result?.orderId ?? payload.salt.toString()
+        const orderId = result.response.id ?? result.order.salt.toString()
         const optimisticOrder = buildOptimisticOpenOrder({
           id: orderId,
           side: submittedSide === ORDER_SIDE.BUY ? 'buy' : 'sell',
@@ -1544,7 +1518,7 @@ export default function EventOrderPanelForm({
           price: limitPriceValue,
           shares: limitSharesValue,
           totalValue,
-          expiration: hasExpirationLimit ? Number(payload.expiration) : null,
+          expiration: hasExpirationLimit ? Number(result.order.expiration) : null,
           outcomeIndex: submittedOutcomeIndex as typeof OUTCOME_INDEX.YES | typeof OUTCOME_INDEX.NO,
           outcomeText: submittedOutcomeText,
           conditionId: activeMarket.condition_id,
