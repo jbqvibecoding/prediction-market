@@ -1,6 +1,7 @@
 import HeaderMenu from '@/app/[locale]/(platform)/_components/HeaderMenu'
 import HeaderSearch from '@/app/[locale]/(platform)/_components/HeaderSearch'
 import HowItWorksDeferred from '@/app/[locale]/(platform)/_components/HowItWorksDeferred'
+import SolanaConnectButton from '@/app/[locale]/(platform)/_components/SolanaConnectButton'
 import HeaderLogo from '@/components/HeaderLogo'
 import { cn } from '@/lib/utils'
 
@@ -20,6 +21,7 @@ export default async function Header() {
         </div>
         <div className="min-w-0 shrink md:min-w-fit md:shrink-0">
           <div className="flex min-w-0 items-center gap-2">
+            <SolanaConnectButton />
             <HeaderMenu />
           </div>
         </div>

@@ -11,6 +11,7 @@ import { TradingOnboardingProvider } from '@/app/[locale]/(platform)/_providers/
 import { loadPlatformMainTags } from '@/lib/platform-main-tags'
 import { buildChildParentMap, buildPlatformNavigationTags } from '@/lib/platform-navigation'
 import { deferPublicShellPrerenderIfNeeded } from '@/lib/public-shell-rendering'
+import { SolanaWalletProvider } from '@/lib/solana/wallet-provider'
 import AppKitProvider from '@/providers/AppKitProvider'
 
 export default async function PlatformLayout({ params, children }: LayoutProps<'/[locale]'>) {
@@ -30,8 +31,9 @@ export default async function PlatformLayout({ params, children }: LayoutProps<'
   const childParentMap = buildChildParentMap(mainTags ?? [])
 
   return (
-    <AppKitProvider>
-      <TradingOnboardingProvider>
+    <SolanaWalletProvider>
+      <AppKitProvider>
+        <TradingOnboardingProvider>
         <PlatformViewerState />
         <FilterProvider>
           <PlatformNavigationProvider tags={tags} childParentMap={childParentMap}>
@@ -43,6 +45,7 @@ export default async function PlatformLayout({ params, children }: LayoutProps<'
           </PlatformNavigationProvider>
         </FilterProvider>
       </TradingOnboardingProvider>
-    </AppKitProvider>
+      </AppKitProvider>
+    </SolanaWalletProvider>
   )
 }
