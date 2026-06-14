@@ -1,6 +1,5 @@
 'use client'
 
-import { useDisconnect } from '@reown/appkit/react'
 import { BadgePercentIcon, ChevronDownIcon, DownloadIcon, SettingsIcon, ShieldIcon, TrophyIcon, UnplugIcon } from 'lucide-react'
 import { useExtracted } from 'next-intl'
 import Image from 'next/image'
@@ -20,9 +19,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import UserInfoSection from '@/components/UserInfoSection'
-import { useAppKit } from '@/hooks/useAppKit'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { usePwaInstall } from '@/hooks/usePwaInstall'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { usePathname } from '@/i18n/navigation'
 import { getAvatarPlaceholderStyle, shouldUseAvatarPlaceholder } from '@/lib/avatar'
 import { signOutAndRedirect } from '@/lib/logout'
@@ -99,8 +98,7 @@ function useHoverMenu(enableHoverOpen: boolean) {
 
 export default function HeaderDropdownUserMenuAuth() {
   const t = useExtracted()
-  const { isReady } = useAppKit()
-  const { disconnect } = useDisconnect()
+  const { disconnect, isConnected } = useWalletConnection()
   const user = useUser()
   const { canShowInstallUi, isIos, isPrompting, requestInstall } = usePwaInstall()
   const pathname = usePathname()
@@ -139,21 +137,9 @@ export default function HeaderDropdownUserMenuAuth() {
   async function handleLogout() {
     handleMenuClose()
 
-    if (!isReady) {
-      try {
-        await signOutAndRedirect({
-          currentPathname: window.location.pathname,
-        })
-      }
-      catch {
-        toast.error(t('Could not log out. Please try again.'))
-      }
-      return
-    }
-
+    // Disconnect the Solana wallet (best-effort) then end the auth session.
     try {
-      await disconnect()
-      return
+      if (isConnected) await disconnect()
     }
     catch {
       //

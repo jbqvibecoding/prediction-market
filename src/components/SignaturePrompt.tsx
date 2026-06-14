@@ -1,6 +1,5 @@
 'use client'
 
-import { useWalletInfo } from '@reown/appkit/react'
 import { Loader2Icon, WalletIcon, XIcon } from 'lucide-react'
 import { useExtracted } from 'next-intl'
 import Image from 'next/image'
@@ -18,15 +17,15 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from '@/components/ui/drawer'
-import { useAppKit } from '@/hooks/useAppKit'
 import { useIsMobile } from '@/hooks/useIsMobile'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { cn } from '@/lib/utils'
 import { useSignaturePrompt } from '@/stores/useSignaturePrompt'
 
 export function SignaturePrompt() {
   const t = useExtracted()
   const isMobile = useIsMobile()
-  const { isReady } = useAppKit()
+  const { isConnected } = useWalletConnection()
   const open = useSignaturePrompt(state => state.open)
   const title = useSignaturePrompt(state => state.title)
   const description = useSignaturePrompt(state => state.description)
@@ -59,7 +58,7 @@ export function SignaturePrompt() {
         <div className="absolute inset-[3px] rounded-[23px] bg-background" />
         <div className="relative flex size-full items-center justify-center">
           <div className="flex size-[90%] items-center justify-center rounded-[24px] bg-background shadow-sm">
-            {isReady ? <SignatureWalletIcon /> : <WalletIcon className="size-16 text-primary" strokeWidth={1.8} />}
+            {isConnected ? <SignatureWalletIcon /> : <WalletIcon className="size-16 text-primary" strokeWidth={1.8} />}
           </div>
         </div>
       </div>
@@ -142,9 +141,8 @@ export function SignaturePrompt() {
 }
 
 function useWalletIcon() {
-  const { walletInfo } = useWalletInfo()
-  const walletName = typeof walletInfo?.name === 'string' ? walletInfo.name : undefined
-  const walletIconUrl = typeof walletInfo?.icon === 'string' ? walletInfo.icon.trim() : ''
+  const { walletName, walletIcon } = useWalletConnection()
+  const walletIconUrl = typeof walletIcon === 'string' ? walletIcon.trim() : ''
 
   return { walletName, walletIconUrl }
 }

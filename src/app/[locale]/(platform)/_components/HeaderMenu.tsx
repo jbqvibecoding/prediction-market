@@ -8,9 +8,9 @@ import { useOptionalTradingOnboarding } from '@/app/[locale]/(platform)/_provide
 import HeaderDropdownUserMenuAuth from '@/components/HeaderDropdownUserMenuAuth'
 import HeaderPortfolio from '@/components/HeaderPortfolio'
 import { Button } from '@/components/ui/button'
-import { useAppKit } from '@/hooks/useAppKit'
 import { useHasHydrated } from '@/hooks/useHasHydrated'
 import { useIsMobile } from '@/hooks/useIsMobile'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { authClient } from '@/lib/auth-client'
 import { useUser } from '@/stores/useUser'
 
@@ -27,7 +27,7 @@ export default function HeaderMenu() {
 
 function HeaderMenuClient() {
   const t = useExtracted()
-  const { open } = useAppKit()
+  const { open } = useWalletConnection()
   const { data: session, isPending: isSessionPending } = useSession()
   const hasHydrated = useHasHydrated()
   const isMobile = useIsMobile()
