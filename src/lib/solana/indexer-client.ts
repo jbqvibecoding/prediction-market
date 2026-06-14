@@ -25,6 +25,20 @@ export interface LeaderboardEntry {
   volume: string
 }
 
+export interface IndexerMarket {
+  /** base58 market pubkey */
+  market: string
+  /** base58 condition account */
+  condition: string
+  collateralMint: string
+  yesMint: string
+  noMint: string
+  resolved: boolean
+  /** 0 = YES, 1 = NO; null until resolved */
+  winningOutcome: number | null
+  volume: string
+}
+
 type Fetcher = typeof fetch
 
 export class IndexerClient {
@@ -37,6 +51,10 @@ export class IndexerClient {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`)
     if (!res.ok) throw new Error(`indexer request failed: ${res.status}`)
     return (await res.json()) as T
+  }
+
+  markets(): Promise<IndexerMarket[]> {
+    return this.json<IndexerMarket[]>('/markets')
   }
 
   positions(user: string): Promise<IndexerPosition[]> {

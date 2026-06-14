@@ -3,6 +3,7 @@ import { setRequestLocale } from 'next-intl/server'
 import { connection } from 'next/server'
 import PortfolioMarketsWonCard from '@/app/[locale]/(platform)/portfolio/_components/PortfolioMarketsWonCard'
 import PortfolioTabs from '@/app/[locale]/(platform)/portfolio/_components/PortfolioTabs'
+import SolanaPositionsList from '@/app/[locale]/(platform)/portfolio/_components/SolanaPositionsList'
 import PortfolioWalletActions from '@/app/[locale]/(platform)/portfolio/_components/PortfolioWalletActions'
 import PublicProfileHeroCards from '@/app/[locale]/(platform)/profile/_components/PublicProfileHeroCards'
 import { UserRepository } from '@/lib/db/queries/user'
@@ -45,6 +46,8 @@ export default async function PortfolioPage({ params }: PageProps<'/[locale]/por
       />
 
       <PortfolioMarketsWonCard depositWalletAddress={publicAddress} />
+
+      <SolanaPositionsList />
 
       <PortfolioTabs userAddress={userAddress} />
     </>
