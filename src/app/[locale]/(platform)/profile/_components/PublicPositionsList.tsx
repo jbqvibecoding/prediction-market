@@ -30,14 +30,15 @@ import {
 import { useAppKit } from '@/hooks/useAppKit'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
+import { useSolanaClob } from '@/hooks/useSolanaClob'
 import { fetchOrderBookSummary } from '@/lib/clob'
-import { getExchangeEip712Domain, ORDER_SIDE, ORDER_TYPE, OUTCOME_INDEX } from '@/lib/constants'
+import { ORDER_SIDE, ORDER_TYPE, OUTCOME_INDEX } from '@/lib/constants'
 import { formatAmountInputValue, formatCentsLabel } from '@/lib/formatters'
 import { applyPositionDeltasToPublicPositions, updateQueryDataWhere } from '@/lib/optimistic-trading'
 import { calculateMarketFill, normalizeBookLevels } from '@/lib/order-panel-utils'
-import { buildOrderPayload, submitOrder } from '@/lib/orders'
-import { signOrderPayload } from '@/lib/orders/signing'
 import { buildShareCardPayload } from '@/lib/share-card'
+import { SIDE_SELL } from '@/lib/solana/order'
+import { centsToPriceMicro, sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { isUserRejectedRequestError, normalizeAddress } from '@/lib/wallet'
 import { useUser } from '@/stores/useUser'
@@ -646,6 +647,7 @@ function useSellPositionFlow({
   const [sellModalPayload, setSellModalPayload] = useState<SellModalPayload | null>(null)
   const [isCashOutSubmitting, setIsCashOutSubmitting] = useState(false)
   const sellRequestIdRef = useRef(0)
+  const { placeOrder: placeSolanaOrder } = useSolanaClob()
 
   const handleSellClick = useCallback(async (position: PublicPosition) => {
     const shares = typeof position.size === 'number' ? position.size : 0
@@ -837,68 +839,22 @@ function useSellPositionFlow({
 
     const outcomeIndex = resolveOutcomeIndex(position)
     const outcomeText = getOutcomeLabel(position)
-    const timestamp = new Date().toISOString()
 
-    const outcomePayload = {
-      id: `portfolio-${tokenId}`,
-      condition_id: conditionId,
-      outcome_text: outcomeText,
-      outcome_index: outcomeIndex,
-      token_id: tokenId,
-      is_winning_outcome: false,
-      created_at: timestamp,
-      updated_at: timestamp,
-    }
-
-    const orderDomain = getExchangeEip712Domain(isNegRisk)
-    const payload = buildOrderPayload({
-      makerAddress,
-      outcome: outcomePayload,
-      side: ORDER_SIDE.SELL,
-      orderType: ORDER_TYPE.MARKET,
-      amount: effectiveShares,
-      limitPrice: '0',
-      limitShares: '0',
-      marketPriceCents,
-    })
-
-    let signature: string
-    try {
-      signature = await runWithSignaturePrompt(() => signOrderPayload({
-        payload,
-        domain: orderDomain,
-        signTypedDataAsync,
-      }))
-    }
-    catch (error) {
-      if (isUserRejectedRequestError(error)) {
-        handleOrderCancelledFeedback()
-        return
-      }
-      handleOrderErrorFeedback('Trade failed', 'We could not sign your order. Please try again.')
+    if (!(marketPriceCents > 0)) {
+      handleOrderErrorFeedback('Trade failed', 'No price available for this market.')
       return
     }
 
     setIsCashOutSubmitting(true)
     try {
-      const result = await submitOrder({
-        order: payload,
-        signature,
-        orderType: ORDER_TYPE.MARKET,
-        conditionId,
-        slug: eventSlug,
-      })
-
-      if (result?.error) {
-        if (isTradingAuthRequiredError(result.error)) {
-          openTradeRequirements({ forceTradingAuth: true })
-          return
-        }
-        else {
-          handleOrderErrorFeedback('Trade failed', result.error)
-        }
-        return
-      }
+      // Solana CLOB market sell: build + wallet-sign + submit to the engine.
+      await runWithSignaturePrompt(() => placeSolanaOrder({
+        market: conditionId,
+        outcome: outcomeIndex,
+        side: SIDE_SELL,
+        priceMicro: centsToPriceMicro(marketPriceCents),
+        shares: sharesToBaseUnits(normalizedSharesToSell),
+      }))
 
       const avgSellPriceLabel = formatCentsLabel(marketPriceCents / 100, { fallback: '—' })
       handleOrderSuccessFeedback({
