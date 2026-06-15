@@ -170,7 +170,6 @@ function mergeUserSettings(previous: User, settingsPatch?: Record<string, any>) 
 function useOnboardingStatus(user: User | null, requiresTradingAuthRefresh: boolean) {
   return useMemo(() => {
     const onboardingSettings = user?.settings?.onboarding ?? {}
-    const tradingAuthSettings = user?.settings?.tradingAuth ?? null
     const hasUsername = Boolean(user && hasUserProvidedUsername(user))
     const needsUsername = Boolean(user && !hasUsername)
     const needsEmail = Boolean(
@@ -180,19 +179,15 @@ function useOnboardingStatus(user: User | null, requiresTradingAuthRefresh: bool
       && !onboardingSettings.emailCompletedAt,
     )
     const hasDepositWalletAddress = Boolean(user?.deposit_wallet_address)
-    const hasDeployedDepositWallet = Boolean(user?.deposit_wallet_address && user?.deposit_wallet_status === 'deployed')
-    const isDepositWalletDeploying = Boolean(
-      user?.deposit_wallet_address
-      && (user.deposit_wallet_status === 'deploying' || user.deposit_wallet_status === 'signed'),
-    )
-    const hasTradingAuth = Boolean(
-      tradingAuthSettings?.relayer?.enabled
-      && tradingAuthSettings?.clob?.enabled
-      && !requiresTradingAuthRefresh,
-    )
-    const hasTokenApprovals = Boolean(tradingAuthSettings?.approvals?.enabled)
-    const hasAutoRedeemApproval = Boolean(tradingAuthSettings?.autoRedeem?.enabled)
-    const tradingReady = hasDeployedDepositWallet && hasTradingAuth && hasTokenApprovals
+    // Solana: there is no deposit-wallet deployment, trading-auth relayer, or
+    // ERC20/1155 token-approval onboarding — a signed-in user is fully ready.
+    // (The EVM onboarding handlers/dialogs below are removed with wagmi in G.)
+    const hasDeployedDepositWallet = Boolean(user)
+    const isDepositWalletDeploying = false
+    const hasTradingAuth = Boolean(user)
+    const hasTokenApprovals = Boolean(user)
+    const hasAutoRedeemApproval = Boolean(user)
+    const tradingReady = Boolean(user)
 
     return {
       needsUsername,
