@@ -13,10 +13,14 @@ import { useIsMobile } from '@/hooks/useIsMobile'
 import { useLiFiWalletUsdBalance } from '@/hooks/useLiFiWalletUsdBalance'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { useSiteIdentity } from '@/hooks/useSiteIdentity'
+import { useSplTransfer } from '@/hooks/useSplTransfer'
 import { MAX_AMOUNT_INPUT } from '@/lib/amount-input'
 import { DEFAULT_ERROR_MESSAGE } from '@/lib/constants'
 import { COLLATERAL_TOKEN_ADDRESS } from '@/lib/contracts'
 import { formatAmountInputValue } from '@/lib/formatters'
+import { isSolanaAddress } from '@/lib/solana/auth'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
 import { buildSendErc20Call } from '@/lib/wallet/transactions'
@@ -152,13 +156,15 @@ function useWalletSendHandler({
   signTypedDataAsync: ReturnType<typeof useSignTypedData>['signTypedDataAsync']
   messages: WalletSendMessages
 }) {
+  const { transfer, connected } = useSplTransfer()
+
   return useCallback(async (event?: React.FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
-    if (!user?.deposit_wallet_address) {
+    if (!connected) {
       toast.error(messages.depositWalletRequired)
       return
     }
-    if (!isAddress(walletSendTo)) {
+    if (!isSolanaAddress(walletSendTo)) {
       toast.error(messages.invalidRecipient)
       return
     }
@@ -170,29 +176,13 @@ function useWalletSendHandler({
 
     setIsWalletSending(true)
     try {
-      const call = buildSendErc20Call({
-        token: COLLATERAL_TOKEN_ADDRESS,
-        to: walletSendTo as `0x${string}`,
-        amount: walletSendAmount,
+      // Solana: SPL transfer collateral from the connected wallet to the recipient.
+      const txSignature = await transfer({
+        mint: getSolanaConfig().collateralMint,
         decimals: 6,
+        to: walletSendTo,
+        amount: sharesToBaseUnits(amountNumber),
       })
-
-      const result = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCalls({
-        user,
-        calls: [call],
-        metadata: 'send_tokens',
-        signTypedDataAsync,
-      }))
-      if (result.error) {
-        if (isTradingAuthRequiredError(result.error)) {
-          handleWithdrawModalChange(false)
-          openTradeRequirements({ forceTradingAuth: true })
-        }
-        else {
-          toast.error(result.error)
-        }
-        return
-      }
 
       toast.success(messages.withdrawalSubmitted, {
         description: messages.withdrawalSubmittedDescription,
@@ -200,7 +190,7 @@ function useWalletSendHandler({
       setPendingWithdrawals((current) => {
         const next = [
           {
-            id: result.txHash ?? `${walletSendTo}:${walletSendAmount}:${Date.now()}`,
+            id: txSignature ?? `${walletSendTo}:${walletSendAmount}:${Date.now()}`,
             amount: walletSendAmount,
             to: walletSendTo,
             createdAt: Date.now(),
@@ -222,16 +212,14 @@ function useWalletSendHandler({
       setIsWalletSending(false)
     }
   }, [
+    connected,
     handleWithdrawModalChange,
     messages,
-    openTradeRequirements,
-    runWithSignaturePrompt,
     setIsWalletSending,
     setPendingWithdrawals,
     setWalletSendAmount,
     setWalletSendTo,
-    signTypedDataAsync,
-    user,
+    transfer,
     walletSendAmount,
     walletSendTo,
   ])
