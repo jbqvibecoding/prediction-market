@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
 import { DEPOSIT_WALLET_BALANCE_QUERY_KEY } from '@/hooks/useBalance'
+import { useConditionalToken } from '@/hooks/useConditionalToken'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { DEFAULT_CONDITION_PARTITION, MICRO_UNIT } from '@/lib/constants'
@@ -31,6 +32,8 @@ import { ZERO_BYTES32 } from '@/lib/contracts'
 import { formatAmountInputValue, toMicro } from '@/lib/formatters'
 import { isCurrentNegRiskAdapterAddress } from '@/lib/neg-risk-adapter'
 import { applyPositionDeltasToUserPositions, applyShareDeltas, updateQueryDataWhere } from '@/lib/optimistic-trading'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
 import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
@@ -89,6 +92,7 @@ export default function EventMergeSharesDialog({
   const isMobile = useIsMobile()
   const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
+  const { merge: mergeConditionalToken } = useConditionalToken()
   const { amount, setAmount, error, setError, isSubmitting, setIsSubmitting, resetFormState } = useMergeSharesFormState()
 
   function formatFullPrecision(value: number) {
@@ -191,41 +195,17 @@ export default function EventMergeSharesDialog({
         setIsSubmitting(false)
         return
       }
-      const mergeContract = isNegRiskMarket ? (negRiskAdapterAddress ?? undefined) : undefined
-
-      const calls = [
-        buildMergePositionCall({
-          conditionId: conditionId as `0x${string}`,
-          partition: [...DEFAULT_CONDITION_PARTITION],
-          amount: toMicro(numericAmount),
-          parentCollectionId: ZERO_BYTES32,
-          contract: mergeContract,
-        }),
-      ]
-
-      const response = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCalls({
-        user,
-        calls,
-        metadata: 'merge_position',
-        signTypedDataAsync,
+      // Solana: burn a complete YES+NO set -> unlock collateral.
+      const txSignature = await runWithSignaturePrompt(() => mergeConditionalToken({
+        market: conditionId,
+        collateralMint: getSolanaConfig().collateralMint,
+        amount: sharesToBaseUnits(numericAmount),
       }))
 
-      if (response?.error) {
-        if (isTradingAuthRequiredError(response.error)) {
-          closeDialog()
-          openTradeRequirements({ forceTradingAuth: true })
-        }
-        else {
-          toast.error(response.error)
-        }
-        setIsSubmitting(false)
-        return
-      }
-
-      if (user?.settings?.notifications?.inapp_order_fills && response?.txHash) {
+      if (user?.settings?.notifications?.inapp_order_fills && txSignature) {
         addLocalOrderFillNotification({
           action: 'merge',
-          txHash: response.txHash,
+          txHash: txSignature,
           title: t('Merge shares'),
           description: marketTitle ?? t('Request submitted.'),
           eventPath,

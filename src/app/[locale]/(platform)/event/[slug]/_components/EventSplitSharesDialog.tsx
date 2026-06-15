@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
 import { DEPOSIT_WALLET_BALANCE_QUERY_KEY } from '@/hooks/useBalance'
+import { useConditionalToken } from '@/hooks/useConditionalToken'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { DEFAULT_CONDITION_PARTITION, MICRO_UNIT } from '@/lib/constants'
@@ -30,6 +31,8 @@ import { ZERO_BYTES32 } from '@/lib/contracts'
 import { formatAmountInputValue, toMicro } from '@/lib/formatters'
 import { isCurrentNegRiskAdapterAddress } from '@/lib/neg-risk-adapter'
 import { applyPositionDeltasToUserPositions, applyShareDeltas, updateQueryDataWhere } from '@/lib/optimistic-trading'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
 import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
@@ -104,6 +107,7 @@ export default function EventSplitSharesDialog({
   const isMobile = useIsMobile()
   const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
+  const { split: splitConditionalToken } = useConditionalToken()
   const { amount, setAmount, error, setError, isSubmitting, setIsSubmitting } = useSplitFormState()
 
   function resetFormState() {
@@ -192,44 +196,17 @@ export default function EventSplitSharesDialog({
     setIsSubmitting(true)
 
     try {
-      const calls = [
-        isNegRiskMarket
-          ? buildNegRiskSplitPositionCall({
-              conditionId: conditionId as `0x${string}`,
-              amount: toMicro(numericAmount),
-              contract: negRiskAdapterAddress ?? undefined,
-            })
-          : buildSplitPositionCall({
-              conditionId: conditionId as `0x${string}`,
-              partition: [...DEFAULT_CONDITION_PARTITION],
-              amount: toMicro(numericAmount),
-              parentCollectionId: ZERO_BYTES32,
-            }),
-      ]
-
-      const response = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCalls({
-        user,
-        calls,
-        metadata: 'split_position',
-        signTypedDataAsync,
+      // Solana: lock collateral -> mint a complete YES+NO set to the wallet.
+      const txSignature = await runWithSignaturePrompt(() => splitConditionalToken({
+        market: conditionId,
+        collateralMint: getSolanaConfig().collateralMint,
+        amount: sharesToBaseUnits(numericAmount),
       }))
 
-      if (response?.error) {
-        if (isTradingAuthRequiredError(response.error)) {
-          closeDialog()
-          openTradeRequirements({ forceTradingAuth: true })
-        }
-        else {
-          toast.error(response.error)
-        }
-        setIsSubmitting(false)
-        return
-      }
-
-      if (user?.settings?.notifications?.inapp_order_fills && response?.txHash) {
+      if (user?.settings?.notifications?.inapp_order_fills && txSignature) {
         addLocalOrderFillNotification({
           action: 'split',
-          txHash: response.txHash,
+          txHash: txSignature,
           title: t('Split shares'),
           description: marketTitle ?? t('Request submitted.'),
           eventPath,
