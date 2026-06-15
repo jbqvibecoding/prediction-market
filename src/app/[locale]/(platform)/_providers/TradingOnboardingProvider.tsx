@@ -26,6 +26,7 @@ import { useAffiliateOrderMetadata } from '@/hooks/useAffiliateOrderMetadata'
 import { useAppKit } from '@/hooks/useAppKit'
 import { useDepositWalletPolling } from '@/hooks/useDepositWalletPolling'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { authClient } from '@/lib/auth-client'
 import {
   clearCommunityAuth,
@@ -358,6 +359,7 @@ function TradingOnboardingProviderContent({
   } | null>(null)
   const { signTypedDataAsync } = useSignTypedData()
   const { signMessageAsync } = useSignMessage()
+  const { open: openWalletConnect } = useWalletConnection()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const t = useExtracted()
   const pathname = usePathname()
@@ -1191,17 +1193,15 @@ function TradingOnboardingProviderContent({
 
   const ensureTradingReady = useCallback(() => {
     if (!user) {
-      void openAppKit()
+      openWalletConnect()
       return false
     }
 
-    if (status.tradingReady) {
-      return true
-    }
-
-    openNextRequirement({ allowTradingAuthPrompt: true })
-    return false
-  }, [openAppKit, openNextRequirement, status.tradingReady, user])
+    // Solana: no EVM deposit-wallet / token-approval onboarding — a connected,
+    // signed-in user is trading-ready. (The legacy EVM onboarding machinery
+    // below is removed with wagmi in Phase G.)
+    return true
+  }, [openWalletConnect, user])
 
   const openTradeRequirements = useCallback((options?: { forceTradingAuth?: boolean }) => {
     openNextRequirement({
