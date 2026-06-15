@@ -9,11 +9,14 @@ import { toast } from 'sonner'
 import { useSignTypedData } from 'wagmi'
 import { fetchLockedSharesByCondition } from '@/app/[locale]/(platform)/profile/_utils/PublicPositionsUtils'
 import { DEPOSIT_WALLET_BALANCE_QUERY_KEY } from '@/hooks/useBalance'
+import { useConditionalToken } from '@/hooks/useConditionalToken'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { DEFAULT_CONDITION_PARTITION } from '@/lib/constants'
 import { UMA_NEG_RISK_ADAPTER_ADDRESS, ZERO_BYTES32 } from '@/lib/contracts'
 import { toMicro } from '@/lib/formatters'
 import { applyConditionReductionsToPublicPositions, applyShareDeltas, updateQueryDataWhere } from '@/lib/optimistic-trading'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { normalizeAddress } from '@/lib/wallet'
 import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
@@ -46,6 +49,7 @@ export function useMergePositionsAction({
   const addLocalOrderFillNotification = useNotifications(state => state.addLocalOrderFillNotification)
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const { signTypedDataAsync } = useSignTypedData()
+  const { merge: mergeConditionalToken } = useConditionalToken()
 
   const handleMergeAll = useCallback(async () => {
     if (!hasMergeableMarkets) {
@@ -115,39 +119,25 @@ export function useMergePositionsAction({
         return
       }
 
-      const calls = preparedMerges.map(entry =>
-        buildMergePositionCall({
-          conditionId: entry.conditionId as `0x${string}`,
-          partition: [...DEFAULT_CONDITION_PARTITION],
-          amount: toMicro(entry.mergeAmount),
-          parentCollectionId: ZERO_BYTES32,
-          contract: entry.isNegRisk ? UMA_NEG_RISK_ADAPTER_ADDRESS : undefined,
-        }),
-      )
-
       setMergeBatchCount(preparedMerges.length)
 
-      const response = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCalls({
-        user,
-        calls,
-        metadata: 'merge_position',
-        signTypedDataAsync,
-      }))
-
-      if (response?.error) {
-        if (isTradingAuthRequiredError(response.error)) {
-          openTradeRequirements({ forceTradingAuth: true })
+      // Solana: merge each eligible pair (burn YES+NO -> unlock collateral).
+      const { collateralMint } = getSolanaConfig()
+      let lastTxSignature: string | undefined
+      await runWithSignaturePrompt(async () => {
+        for (const entry of preparedMerges) {
+          lastTxSignature = await mergeConditionalToken({
+            market: entry.conditionId,
+            collateralMint,
+            amount: sharesToBaseUnits(entry.mergeAmount),
+          })
         }
-        else {
-          toast.error(response.error)
-        }
-        return
-      }
+      })
 
-      if (user?.settings?.notifications?.inapp_order_fills && response?.txHash) {
+      if (user?.settings?.notifications?.inapp_order_fills && lastTxSignature) {
         addLocalOrderFillNotification({
           action: 'merge',
-          txHash: response.txHash,
+          txHash: lastTxSignature,
           title: 'Merge shares',
           description: preparedMerges.length > 1
             ? 'Request submitted for multiple markets.'

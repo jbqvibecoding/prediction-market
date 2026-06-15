@@ -20,6 +20,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
 import { DEPOSIT_WALLET_BALANCE_QUERY_KEY } from '@/hooks/useBalance'
+import { useConditionalToken } from '@/hooks/useConditionalToken'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { useSiteIdentity } from '@/hooks/useSiteIdentity'
@@ -27,6 +28,8 @@ import { formatCurrency, formatPercent } from '@/lib/formatters'
 import { isCurrentNegRiskAdapterAddress } from '@/lib/neg-risk-adapter'
 import { removeClaimedPublicPositions, updateQueryDataWhere } from '@/lib/optimistic-trading'
 import { buildPublicProfilePath } from '@/lib/platform-routing'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn, triggerConfetti } from '@/lib/utils'
 import { normalizeAddress } from '@/lib/wallet'
@@ -210,6 +213,7 @@ export default function PortfolioMarketsWonCardClient({ data }: PortfolioMarkets
   const { ensureTradingReady, openTradeRequirements, promptAutoRedeem } = useTradingOnboarding()
   const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
+  const { redeem: redeemConditionalToken } = useConditionalToken()
   const queryClient = useQueryClient()
   const user = useUser()
   const router = useRouter()
@@ -310,78 +314,49 @@ export default function PortfolioMarketsWonCardClient({ data }: PortfolioMarkets
     setIsSubmitting(true)
 
     try {
-      const response = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCallItemsWithSplitFallback({
-        user,
-        items: claimTargets,
-        getCall: market =>
-          market.isNegRisk
-            ? buildNegRiskRedeemPositionCall({
-                conditionId: market.conditionId as `0x${string}`,
-                yesAmount: market.yesShares ?? 0,
-                noAmount: market.noShares ?? 0,
-                contract: normalizeAddress(market.negRiskAdapterAddress) as `0x${string}`,
-              })
-            : buildRedeemPositionCall({
-                conditionId: market.conditionId as `0x${string}`,
-                indexSets: market.indexSets,
-              }),
-        metadata: 'redeem_positions',
-        signTypedDataAsync,
-      }))
+      // Solana: redeem each won market's winning shares for collateral.
+      const { collateralMint } = getSolanaConfig()
+      const succeeded: PortfolioClaimMarket[] = []
+      const failed: PortfolioClaimMarket[] = []
 
-      if (response?.error) {
-        if (isTradingAuthRequiredError(response.error)) {
-          setIsDialogOpen(false)
-          openTradeRequirements({ forceTradingAuth: true })
+      await runWithSignaturePrompt(async () => {
+        for (const market of claimTargets) {
+          try {
+            await redeemConditionalToken({
+              market: market.conditionId,
+              collateralMint,
+              amount: sharesToBaseUnits(market.shares),
+              winningOutcome: market.outcomeIndex ?? 0,
+            })
+            succeeded.push(market)
+          }
+          catch (redeemError) {
+            console.error('Failed to redeem market.', redeemError)
+            failed.push(market)
+          }
         }
-        else {
-          toast.error(response.error)
-        }
-        return
-      }
-
-      toast.success(t('Claim submitted'), {
-        description: claimTargets.length > 1
-          ? t('We sent a claim for your winning markets.')
-          : t('We sent your claim transaction.'),
       })
 
-      const claimedConditionIds = response.successfulItems.map(market => market.conditionId)
-      syncClaimedMarkets(claimedConditionIds)
+      const claimedConditionIds = succeeded.map(market => market.conditionId)
+      if (claimedConditionIds.length > 0) {
+        syncClaimedMarkets(claimedConditionIds)
+        toast.success(t('Claim submitted'), {
+          description: claimedConditionIds.length > 1
+            ? t('We sent a claim for your winning markets.')
+            : t('We sent your claim transaction.'),
+        })
+      }
 
-      if (response.failedItems.length === 0) {
+      if (failed.length === 0) {
         setHiddenClaimSignature(claimableSignature)
+        setIsDialogOpen(false)
+        promptAutoRedeem()
       }
-
-      if (response.partialFailure) {
+      else {
         toast.error(t('We could not submit your claim. Please try again.'))
-
-        const failureError = response.failure?.error
-        if (failureError && isTradingAuthRequiredError(failureError)) {
-          setIsDialogOpen(false)
-          openTradeRequirements({ forceTradingAuth: true })
-        }
-        return
       }
-
-      setIsDialogOpen(false)
-      promptAutoRedeem()
     }
     catch (error) {
-      if (error instanceof DepositWalletCallItemsSplitFallbackError) {
-        const claimedConditionIds = (error.successfulItems as PortfolioClaimMarket[]).map(market => market.conditionId)
-        syncClaimedMarkets(claimedConditionIds)
-        if (claimedConditionIds.length > 0) {
-          toast.success(t('Claim submitted'), {
-            description: claimedConditionIds.length > 1
-              ? t('We sent a claim for your winning markets.')
-              : t('We sent your claim transaction.'),
-          })
-          toast.error(t('We could not submit your claim. Please try again.'))
-          return
-        }
-      }
-
       console.error('Failed to submit claim.', error)
       toast.error(t('We could not submit your claim. Please try again.'))
     }

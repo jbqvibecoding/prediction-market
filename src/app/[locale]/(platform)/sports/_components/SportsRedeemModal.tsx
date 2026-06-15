@@ -12,10 +12,13 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Drawer, DrawerContent, DrawerTitle } from '@/components/ui/drawer'
 import { DEPOSIT_WALLET_BALANCE_QUERY_KEY } from '@/hooks/useBalance'
+import { useConditionalToken } from '@/hooks/useConditionalToken'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { formatCurrency, formatSharesLabel } from '@/lib/formatters'
 import { isCurrentNegRiskAdapterAddress } from '@/lib/neg-risk-adapter'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
 import { normalizeAddress } from '@/lib/wallet'
@@ -306,6 +309,7 @@ function useRedeemClaimSubmission({
   const queryClient = useQueryClient()
   const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
+  const { redeem: redeemConditionalToken } = useConditionalToken()
   const { ensureTradingReady, openTradeRequirements, promptAutoRedeem } = useTradingOnboarding()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -373,77 +377,55 @@ function useRedeemClaimSubmission({
     setIsSubmitting(true)
 
     try {
-      const response = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCallItemsWithSplitFallback({
-        user,
-        items: selectedGroups,
-        getCall: group =>
-          group.isNegRisk
-            ? buildNegRiskRedeemPositionCall({
-                conditionId: group.conditionId as `0x${string}`,
-                yesAmount: group.yesShares ?? 0,
-                noAmount: group.noShares ?? 0,
-                contract: normalizeAddress(group.negRiskAdapterAddress) as `0x${string}`,
-              })
-            : buildRedeemPositionCall({
-                conditionId: group.conditionId as `0x${string}`,
-                indexSets: group.indexSets,
-              }),
-        metadata: 'redeem_positions',
-        signTypedDataAsync,
-      }))
-      if (response?.error) {
-        if (isTradingAuthRequiredError(response.error)) {
-          openTradeRequirements({ forceTradingAuth: true })
-        }
-        else {
-          toast.error(response.error)
-        }
-        return
-      }
+      // Solana: redeem each selected group's winning shares for collateral.
+      const { collateralMint } = getSolanaConfig()
+      const succeeded: SportsRedeemModalGroup[] = []
+      const failed: SportsRedeemModalGroup[] = []
 
-      toast.success('Claim submitted', {
-        description: response.successfulItems.length > 1
-          ? 'We sent claims for your selected markets.'
-          : 'We sent your claim transaction.',
+      await runWithSignaturePrompt(async () => {
+        for (const group of selectedGroups) {
+          const winner = group.positions.find(position => position.outcomeIndex != null)?.outcomeIndex
+          const winningOutcome = typeof winner === 'number' ? winner : 0
+          if (!(group.amount > 0)) {
+            failed.push(group)
+            continue
+          }
+          try {
+            await redeemConditionalToken({
+              market: group.conditionId,
+              collateralMint,
+              amount: sharesToBaseUnits(group.amount),
+              winningOutcome,
+            })
+            succeeded.push(group)
+          }
+          catch (redeemError) {
+            console.error('Failed to redeem group.', redeemError)
+            failed.push(group)
+          }
+        }
       })
-      if (response.partialFailure) {
+
+      const claimedConditionIds = new Set(succeeded.map(group => group.conditionId))
+      if (claimedConditionIds.size > 0) {
+        syncClaimedConditionIds(claimedConditionIds)
+        toast.success('Claim submitted', {
+          description: claimedConditionIds.size > 1
+            ? 'We sent claims for your selected markets.'
+            : 'We sent your claim transaction.',
+        })
+      }
+
+      if (failed.length === 0) {
+        onOpenChange(false)
+        promptAutoRedeem()
+      }
+      else {
         toast.error('We could not submit your claim. Please try again.')
-      }
-
-      const claimedConditionIds = new Set(response.successfulItems.map(group => group.conditionId))
-      syncClaimedConditionIds(claimedConditionIds)
-      if (response.partialFailure) {
-        const failureError = response.failure?.error
-        if (failureError && isTradingAuthRequiredError(failureError)) {
-          onOpenChange(false)
-          openTradeRequirements({ forceTradingAuth: true })
-          return
-        }
-
         onPartialClaimSuccess(Array.from(claimedConditionIds))
-        return
       }
-
-      onOpenChange(false)
-      promptAutoRedeem()
     }
     catch (error) {
-      if (error instanceof DepositWalletCallItemsSplitFallbackError) {
-        const claimedConditionIds = new Set(
-          (error.successfulItems as SportsRedeemModalGroup[]).map(group => group.conditionId),
-        )
-        syncClaimedConditionIds(claimedConditionIds)
-        onPartialClaimSuccess(Array.from(claimedConditionIds))
-        if (claimedConditionIds.size > 0) {
-          toast.success('Claim submitted', {
-            description: claimedConditionIds.size > 1
-              ? 'We sent claims for your selected markets.'
-              : 'We sent your claim transaction.',
-          })
-          toast.error('We could not submit your claim. Please try again.')
-          return
-        }
-      }
       console.error('Failed to submit claim.', error)
       toast.error('We could not submit your claim. Please try again.')
     }
