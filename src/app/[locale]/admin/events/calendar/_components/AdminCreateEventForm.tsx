@@ -63,9 +63,13 @@ import {
 } from 'lucide-react'
 import { useExtracted } from 'next-intl'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useConnection, useWallet } from '@solana/wallet-adapter-react'
+import { PublicKey, Transaction } from '@solana/web3.js'
 import { toast } from 'sonner'
 import { createPublicClient, createWalletClient, custom, formatUnits, getAddress, http, isAddress, keccak256, stringToHex } from 'viem'
 import { usePublicClient, useWalletClient } from 'wagmi'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { buildInitializeConditionInstruction } from '@/lib/solana/conditional-token'
 import AppLink from '@/components/AppLink'
 import EventIconImage from '@/components/EventIconImage'
 import { Button } from '@/components/ui/button'
@@ -364,6 +368,10 @@ function useAdminCreateEventForm({
   const { chainId: appKitChainId } = useAppKitNetworkCore()
   const { data: walletClient } = useWalletClient()
   const publicClient = usePublicClient()
+  // Solana context for on-chain market initialization (initialize_condition).
+  // The admin route is wrapped in SolanaWalletProvider (see admin/layout.tsx).
+  const solanaWallet = useWallet()
+  const { connection: solanaConnection } = useConnection()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const t = useExtracted()
   const user = useUser()
@@ -3917,6 +3925,74 @@ function useAdminCreateEventForm({
         }
 
         const tx = activePreparedSignaturePlan.txPlan[index]
+
+        // Solana on-chain market initialization (initialize_condition), the
+        // replacement for the EVM "initialize market" tx. This branch is inert
+        // for EVM plans: their `initialize-market-*` items still carry a 0x
+        // address in `to`, so `!isAddress(tx.to)` is false. A Solana-aware
+        // `/prepare` service emits these items with the conditional_token
+        // program id in `to` (non-EVM) and the base58 market pubkey in
+        // `marketKey`; the connected Solana wallet is payer + resolve authority.
+        if (tx.id.startsWith('initialize-market-') && tx.marketKey && !isAddress(tx.to)) {
+          const solanaPayer = solanaWallet.publicKey
+          const solanaSend = solanaWallet.sendTransaction
+          if (!solanaPayer || !solanaSend) {
+            throw new Error('Connect a Solana wallet to initialize the market on-chain.')
+          }
+
+          setSignatureTxs(previous => previous.map((item, itemIndex) =>
+            itemIndex === index ? { ...item, status: 'awaiting_wallet', error: undefined } : item,
+          ))
+
+          const instruction = buildInitializeConditionInstruction({
+            market: new PublicKey(tx.marketKey),
+            payer: solanaPayer,
+            collateralMint: new PublicKey(getSolanaConfig().collateralMint),
+            authority: solanaPayer,
+          })
+
+          let signature: string
+          try {
+            signature = await runWithSignaturePrompt(
+              () => solanaSend(new Transaction().add(instruction), solanaConnection),
+              {
+                title: t('Initialize market'),
+                description: t('Open your wallet to create the market onchain.'),
+              },
+            )
+          }
+          catch (sendError) {
+            const message = sendError instanceof Error ? sendError.message : String(sendError)
+            if (isAlreadyInitializedError(message)) {
+              setSignatureTxs(previous => previous.map((item, itemIndex) =>
+                itemIndex === index ? { ...item, status: 'success', error: undefined } : item,
+              ))
+              continue
+            }
+            throw sendError
+          }
+
+          setSignatureTxs(previous => previous.map((item, itemIndex) =>
+            itemIndex === index ? { ...item, status: 'confirming', hash: signature } : item,
+          ))
+          await solanaConnection.confirmTransaction(signature, 'confirmed')
+          setSignatureTxs(previous => previous.map((item, itemIndex) =>
+            itemIndex === index ? { ...item, status: 'success' } : item,
+          ))
+
+          completedById.set(tx.id, signature)
+          try {
+            await persistConfirmedTxs(
+              activePreparedSignaturePlan.requestId,
+              Array.from(completedById.entries()).map(([id, confirmedHash]) => ({ id, hash: confirmedHash })),
+            )
+          }
+          catch (persistError) {
+            console.error('Could not persist confirmed tx hashes:', persistError)
+          }
+          continue
+        }
+
         if (!isAddress(tx.to)) {
           throw new Error(`Invalid tx target for ${tx.id}.`)
         }
