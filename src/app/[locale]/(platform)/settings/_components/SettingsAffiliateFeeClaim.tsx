@@ -127,6 +127,11 @@ export default function SettingsAffiliateFeeClaim() {
   }
 
   async function handleClaim() {
+    // Solana: affiliate fee claiming is an EVM deposit-wallet on-chain flow with
+    // no Solana equivalent yet, so it is disabled. (Removed with viem in G.)
+    toast.info(t('Affiliate fee claiming is not available yet.'))
+    return
+
     if (!user) {
       await open()
       return

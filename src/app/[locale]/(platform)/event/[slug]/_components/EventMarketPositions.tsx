@@ -1010,7 +1010,10 @@ export default function EventMarketPositions({
                 market={market}
                 onSell={handleSell}
                 onShare={handleShareClick}
-                onConvert={isNegRiskEnabled && resolvedConvertOptions.length > 0 ? handleConvertClick : undefined}
+                // Solana: neg-risk position "convert" is an EVM CTF-adapter
+                // feature with no on-chain equivalent here, so it is disabled
+                // (the Convert button never renders and the dialog is unreachable).
+                onConvert={undefined}
               />
             ))}
           </tbody>

@@ -248,6 +248,12 @@ export default function AdminAffiliateClaimableFeesCard({
   }
 
   async function handleClaim() {
+    // Solana: affiliate fee claiming (deposit-wallet and connected-EOA paths)
+    // is EVM-only with no Solana equivalent yet, so it is disabled.
+    // (Removed with viem in G.)
+    toast.info(t('Affiliate fee claiming is not available yet.'))
+    return
+
     if (!isConnected) {
       await open()
       return
