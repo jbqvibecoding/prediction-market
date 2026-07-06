@@ -4,8 +4,10 @@ import { useCallback } from 'react'
 import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js'
 import {
+  buildInitializeConditionInstruction,
   buildMergeInstruction,
   buildRedeemInstruction,
+  buildResolveInstruction,
   buildSplitInstruction,
 } from '@/lib/solana/conditional-token'
 
@@ -23,6 +25,22 @@ export interface RedeemArgs extends ConditionalTokenArgs {
   winningOutcome: number
 }
 
+export interface InitializeConditionArgs {
+  /** base58 market pubkey (condition seed) */
+  market: string
+  /** base58 collateral mint */
+  collateralMint: string
+  /** base58 wallet allowed to later resolve this condition */
+  authority: string
+}
+
+export interface ResolveArgs {
+  /** base58 market pubkey (condition seed) */
+  market: string
+  /** 0 = YES wins, 1 = NO wins */
+  winningOutcome: number
+}
+
 export interface UseConditionalToken {
   /** lock collateral -> mint YES + NO; resolves to the tx signature */
   split: (args: ConditionalTokenArgs) => Promise<string>
@@ -30,6 +48,10 @@ export interface UseConditionalToken {
   merge: (args: ConditionalTokenArgs) => Promise<string>
   /** after resolution, burn winning token -> unlock collateral */
   redeem: (args: RedeemArgs) => Promise<string>
+  /** admin: create the condition (YES/NO mints + vault) for a market */
+  initializeCondition: (args: InitializeConditionArgs) => Promise<string>
+  /** admin: record the winning outcome (authority-only on-chain) */
+  resolve: (args: ResolveArgs) => Promise<string>
   connected: boolean
 }
 
@@ -97,5 +119,34 @@ export function useConditionalToken(): UseConditionalToken {
     [publicKey, send],
   )
 
-  return { split, merge, redeem, connected: Boolean(publicKey) }
+  const initializeCondition = useCallback(
+    (args: InitializeConditionArgs) => {
+      if (!publicKey) throw new Error('wallet not connected')
+      return send(
+        buildInitializeConditionInstruction({
+          market: new PublicKey(args.market),
+          payer: publicKey,
+          collateralMint: new PublicKey(args.collateralMint),
+          authority: new PublicKey(args.authority),
+        }),
+      )
+    },
+    [publicKey, send],
+  )
+
+  const resolve = useCallback(
+    (args: ResolveArgs) => {
+      if (!publicKey) throw new Error('wallet not connected')
+      return send(
+        buildResolveInstruction({
+          market: new PublicKey(args.market),
+          authority: publicKey,
+          winningOutcome: args.winningOutcome,
+        }),
+      )
+    },
+    [publicKey, send],
+  )
+
+  return { split, merge, redeem, initializeCondition, resolve, connected: Boolean(publicKey) }
 }

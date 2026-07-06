@@ -1,6 +1,7 @@
 import {
   PublicKey,
   SystemProgram,
+  SYSVAR_RENT_PUBKEY,
   TransactionInstruction,
 } from '@solana/web3.js'
 
@@ -36,8 +37,10 @@ export const OUTCOME_YES = 0
 export const OUTCOME_NO = 1
 
 const DISCRIMINATOR = {
+  initializeCondition: Uint8Array.from([210, 55, 126, 97, 178, 72, 14, 59]),
   split: Uint8Array.from([124, 189, 27, 43, 216, 40, 147, 66]),
   merge: Uint8Array.from([148, 141, 236, 47, 174, 126, 69, 111]),
+  resolve: Uint8Array.from([246, 150, 236, 206, 108, 63, 58, 10]),
   redeem: Uint8Array.from([184, 12, 86, 149, 70, 196, 97, 225]),
 } as const
 
@@ -182,5 +185,86 @@ export function buildRedeemInstruction(params: RedeemParams): TransactionInstruc
       key(TOKEN_PROGRAM_ID, false, false),
     ],
     data: encodeAmountData(DISCRIMINATOR.redeem, amount),
+  })
+}
+
+export interface InitializeConditionParams {
+  /** base58 market pubkey (the condition's seed) */
+  market: PublicKey
+  /** the fee payer / creator wallet (signer) */
+  payer: PublicKey
+  collateralMint: PublicKey
+  /** wallet allowed to later `resolve` this condition (the market authority/oracle) */
+  authority: PublicKey
+}
+
+/**
+ * initialize_condition: create the YES/NO mints, the collateral vault, and the
+ * `Condition` record for `market`. Mirrors the EVM "initialize market" step of
+ * admin market creation. The `authority` arg is written into the Condition and
+ * is the only wallet permitted to `resolve` it.
+ */
+export function buildInitializeConditionInstruction(
+  params: InitializeConditionParams,
+): TransactionInstruction {
+  const { market, payer, collateralMint, authority } = params
+  const condition = deriveCondition(market)
+  const yesMint = deriveYesMint(condition)
+  const noMint = deriveNoMint(condition)
+  const vault = deriveVault(condition)
+
+  const data = Buffer.alloc(8 + 32)
+  data.set(DISCRIMINATOR.initializeCondition, 0)
+  data.set(authority.toBuffer(), 8)
+
+  return new TransactionInstruction({
+    programId: CONDITIONAL_TOKEN_PROGRAM_ID,
+    keys: [
+      key(payer, true, true),
+      key(market, false, false),
+      key(collateralMint, false, false),
+      key(condition, false, true),
+      key(yesMint, false, true),
+      key(noMint, false, true),
+      key(vault, false, true),
+      key(TOKEN_PROGRAM_ID, false, false),
+      key(SystemProgram.programId, false, false),
+      key(SYSVAR_RENT_PUBKEY, false, false),
+    ],
+    data,
+  })
+}
+
+export interface ResolveParams {
+  /** base58 market pubkey (the condition's seed) */
+  market: PublicKey
+  /** the condition authority (signer) — must equal Condition.authority */
+  authority: PublicKey
+  /** 0 = YES wins, 1 = NO wins */
+  winningOutcome: number
+}
+
+/**
+ * resolve: record the winning outcome for a condition. Only the condition
+ * authority may call this. Mirrors the EVM direct-resolution "propose &
+ * resolve" settlement step. Binary only (YES/NO); there is no on-chain
+ * "unknown" outcome.
+ */
+export function buildResolveInstruction(params: ResolveParams): TransactionInstruction {
+  const { market, authority, winningOutcome } = params
+  const condition = deriveCondition(market)
+
+  const data = Buffer.alloc(8 + 1)
+  data.set(DISCRIMINATOR.resolve, 0)
+  data.writeUInt8(winningOutcome, 8)
+
+  return new TransactionInstruction({
+    programId: CONDITIONAL_TOKEN_PROGRAM_ID,
+    keys: [
+      key(authority, true, false),
+      key(market, false, false),
+      key(condition, false, true),
+    ],
+    data,
   })
 }

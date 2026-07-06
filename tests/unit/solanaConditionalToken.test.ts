@@ -8,11 +8,14 @@ import {
   CONDITIONAL_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   associatedTokenAddress,
+  buildInitializeConditionInstruction,
   buildMergeInstruction,
   buildRedeemInstruction,
+  buildResolveInstruction,
   buildSplitInstruction,
   deriveCondition,
   deriveNoMint,
+  deriveVault,
   deriveYesMint,
 } from '@/lib/solana/conditional-token'
 
@@ -70,5 +73,59 @@ describe('conditional-token instruction builders', () => {
     // winning_mint slot (index 5) differs by outcome
     expect(yes.keys[5].pubkey.equals(deriveYesMint(condition))).toBe(true)
     expect(no.keys[5].pubkey.equals(deriveNoMint(condition))).toBe(true)
+  })
+})
+
+describe('admin instruction builders (initialize_condition / resolve)', () => {
+  const authority = Keypair.generate().publicKey
+
+  it('initialize_condition: discriminator + authority arg + PDA account metas', () => {
+    const ix = buildInitializeConditionInstruction({
+      market,
+      payer: user,
+      collateralMint,
+      authority,
+    })
+    expect(ix.programId.equals(CONDITIONAL_TOKEN_PROGRAM_ID)).toBe(true)
+    // discriminator
+    expect([...ix.data.subarray(0, 8)]).toEqual([210, 55, 126, 97, 178, 72, 14, 59])
+    // authority pubkey serialized after the discriminator (32 bytes)
+    expect(ix.data).toHaveLength(8 + 32)
+    expect(new PublicKey(ix.data.subarray(8, 40)).equals(authority)).toBe(true)
+
+    // 10 accounts; payer is the only signer, and is writable
+    expect(ix.keys).toHaveLength(10)
+    expect(ix.keys[0].pubkey.equals(user)).toBe(true)
+    expect(ix.keys[0].isSigner).toBe(true)
+    expect(ix.keys[0].isWritable).toBe(true)
+    expect(ix.keys.filter(k => k.isSigner)).toHaveLength(1)
+
+    // condition/yes/no/vault PDAs present and writable (init)
+    const condition = deriveCondition(market)
+    for (const pda of [condition, deriveYesMint(condition), deriveNoMint(condition), deriveVault(condition)]) {
+      const slot = ix.keys.find(k => k.pubkey.equals(pda))
+      expect(slot?.isWritable).toBe(true)
+    }
+    // market seed account is read-only
+    const marketSlot = ix.keys.find(k => k.pubkey.equals(market))
+    expect(marketSlot?.isWritable).toBe(false)
+  })
+
+  it('resolve: discriminator + u8 outcome; authority signs, condition writable', () => {
+    const yes = buildResolveInstruction({ market, authority, winningOutcome: 0 })
+    const no = buildResolveInstruction({ market, authority, winningOutcome: 1 })
+    expect([...yes.data.subarray(0, 8)]).toEqual([246, 150, 236, 206, 108, 63, 58, 10])
+    expect(yes.data).toHaveLength(8 + 1)
+    expect(yes.data.readUInt8(8)).toBe(0)
+    expect(no.data.readUInt8(8)).toBe(1)
+
+    expect(yes.keys).toHaveLength(3)
+    // authority is the sole signer and is not writable
+    expect(yes.keys[0].pubkey.equals(authority)).toBe(true)
+    expect(yes.keys[0].isSigner).toBe(true)
+    expect(yes.keys[0].isWritable).toBe(false)
+    // condition PDA is writable (records the outcome)
+    const conditionSlot = yes.keys.find(k => k.pubkey.equals(deriveCondition(market)))
+    expect(conditionSlot?.isWritable).toBe(true)
   })
 })

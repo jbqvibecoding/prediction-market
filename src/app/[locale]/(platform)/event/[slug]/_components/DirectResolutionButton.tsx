@@ -1,15 +1,11 @@
 'use client'
 
 import type { MouseEvent } from 'react'
-import type { Address, Hex } from 'viem'
 import type { DirectResolutionOutcome } from '@/lib/direct-resolution'
 import type { Event } from '@/types'
-import { useAppKitAccount } from '@reown/appkit/react'
 import { useExtracted } from 'next-intl'
 import { useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { getAddress, isAddress } from 'viem'
-import { usePublicClient, useWalletClient } from 'wagmi'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -21,21 +17,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { useConditionalToken } from '@/hooks/useConditionalToken'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { OUTCOME_INDEX } from '@/lib/constants'
-import {
-  CTF_ADAPTER_QUESTION_ABI,
-  DIRECT_RESOLUTION_ORACLE_ABI,
-
-  getDirectResolutionAdapterAddress,
-  getDirectResolutionNegRiskOperatorAddress,
-  getDirectResolutionOracleAddress,
-  getDirectResolutionPrice,
-  getDirectResolutionQuestionIds,
-  isDirectResolutionMarket,
-  YES_OR_NO_IDENTIFIER,
-} from '@/lib/direct-resolution'
-import { readCreatorProposerWhitelistStatus } from '@/lib/proposer-whitelist'
+import { isDirectResolutionMarket } from '@/lib/direct-resolution'
 import { cn } from '@/lib/utils'
 
 interface DirectResolutionButtonProps {
@@ -47,48 +32,7 @@ interface DirectResolutionButtonProps {
   onClick?: (event: MouseEvent<HTMLButtonElement>) => void
 }
 
-interface AdapterQuestionData {
-  requestTimestamp: bigint
-  resolved: boolean
-  ancillaryData: Hex
-}
-
-type DirectResolutionState = 'idle' | 'checking' | 'not_whitelisted' | 'missing_request' | 'pending' | 'submitted' | 'resolved' | 'error'
-
-function normalizeQuestionData(value: unknown): AdapterQuestionData | null {
-  if (Array.isArray(value)) {
-    const requestTimestamp = value[0]
-    const resolved = value[5]
-    const ancillaryData = value[11]
-    if (typeof requestTimestamp !== 'bigint' || typeof resolved !== 'boolean' || typeof ancillaryData !== 'string') {
-      return null
-    }
-    return {
-      requestTimestamp,
-      resolved,
-      ancillaryData: ancillaryData as Hex,
-    }
-  }
-
-  if (!value || typeof value !== 'object') {
-    return null
-  }
-
-  const record = value as Record<string, unknown>
-  const requestTimestamp = record.requestTimestamp
-  const resolved = record.resolved
-  const ancillaryData = record.ancillaryData
-
-  if (typeof requestTimestamp !== 'bigint' || typeof resolved !== 'boolean' || typeof ancillaryData !== 'string') {
-    return null
-  }
-
-  return {
-    requestTimestamp,
-    resolved,
-    ancillaryData: ancillaryData as Hex,
-  }
-}
+type DirectResolutionState = 'idle' | 'pending' | 'submitted' | 'resolved' | 'error'
 
 function getOutcomeLabel(market: Event['markets'][number], outcomeIndex: number, fallback: string) {
   return market.outcomes.find(outcome => outcome.outcome_index === outcomeIndex)?.outcome_text || fallback
@@ -107,9 +51,7 @@ export default function DirectResolutionButton({
   onClick,
 }: DirectResolutionButtonProps) {
   const t = useExtracted()
-  const { address } = useAppKitAccount({ namespace: 'eip155' })
-  const publicClient = usePublicClient()
-  const { data: walletClient } = useWalletClient()
+  const { resolve: resolveConditional, connected } = useConditionalToken()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const rulesCheckboxId = useId()
   const sourceCheckboxId = useId()
@@ -123,67 +65,24 @@ export default function DirectResolutionButton({
   const isDirect = isDirectResolutionMarket(market)
   const resolutionSource = getResolutionSource(market)
   const requiresSourceConfirmation = Boolean(resolutionSource)
-  const connectedAddress = address && isAddress(address) ? getAddress(address) as Address : null
   const isResolved = Boolean(market.is_resolved || market.condition?.resolved)
   const canSubmit = Boolean(
     isDirect
-    && connectedAddress
+    && connected
     && selectedOutcome
+    && selectedOutcome !== 'unknown'
     && rulesConfirmed
     && (!requiresSourceConfirmation || sourceConfirmed)
-    && state !== 'checking'
     && state !== 'pending'
-    && state !== 'not_whitelisted'
-    && state !== 'missing_request'
     && !isResolved,
   )
 
-  const outcomeOptions = useMemo<Array<{ value: DirectResolutionOutcome, label: string }>>(() => {
-    const yesLabel = getOutcomeLabel(market, OUTCOME_INDEX.YES, t('Yes'))
-    const noLabel = getOutcomeLabel(market, OUTCOME_INDEX.NO, t('No'))
-    const base: Array<{ value: DirectResolutionOutcome, label: string }> = [
-      { value: 'yes', label: yesLabel },
-      { value: 'no', label: noLabel },
-    ]
-    return market.neg_risk
-      ? base
-      : [...base, { value: 'unknown', label: t('Unknown') }]
-  }, [market, t])
-
-  async function checkWhitelist() {
-    if (!connectedAddress) {
-      setState('not_whitelisted')
-      setMessage(t('Connect an authorized proposer wallet to resolve this market.'))
-      return false
-    }
-    if (!isAddress(event.creator)) {
-      setState('error')
-      setMessage(t('We could not confirm who controls resolution for this market.'))
-      return false
-    }
-
-    setState('checking')
-    setMessage('')
-    try {
-      const status = await readCreatorProposerWhitelistStatus({
-        creator: getAddress(event.creator) as Address,
-      })
-      const isAllowed = status.proposers.some(proposer => proposer.toLowerCase() === connectedAddress.toLowerCase())
-      if (!status.whitelistAddress || !isAllowed) {
-        setState('not_whitelisted')
-        setMessage(t('You are not allowed to propose a result for this market.'))
-        return false
-      }
-      setState('idle')
-      return true
-    }
-    catch (error) {
-      console.error('Direct resolution whitelist check failed:', error)
-      setState('error')
-      setMessage(t('We could not check your permission right now. Try again.'))
-      return false
-    }
-  }
+  // The Solana conditional-token program is binary (YES/NO) — there is no
+  // on-chain "unknown" outcome, so it is not offered.
+  const outcomeOptions = useMemo<Array<{ value: DirectResolutionOutcome, label: string }>>(() => [
+    { value: 'yes', label: getOutcomeLabel(market, OUTCOME_INDEX.YES, t('Yes')) },
+    { value: 'no', label: getOutcomeLabel(market, OUTCOME_INDEX.NO, t('No')) },
+  ], [market, t])
 
   async function openDialog(event: MouseEvent<HTMLButtonElement>) {
     onClick?.(event)
@@ -199,88 +98,46 @@ export default function DirectResolutionButton({
       setMessage(t('This market is already resolved.'))
       return
     }
-    void checkWhitelist()
+    setState('idle')
+    setMessage('')
+    if (!connected) {
+      setMessage(t('Connect an authorized proposer wallet to resolve this market.'))
+    }
   }
 
   async function submitResolution() {
-    if (!publicClient || !walletClient || !connectedAddress || !selectedOutcome) {
+    if (!connected || !selectedOutcome) {
       toast.error(t('Wallet connection is not ready.'))
       return
     }
 
-    const allowed = await checkWhitelist()
-    if (!allowed) {
+    const conditionId = market.condition_id
+    if (!conditionId) {
+      setState('error')
+      setMessage(t('This market is not ready for direct resolution yet.'))
       return
     }
 
-    const adapterAddress = getDirectResolutionAdapterAddress(market)
-    const { adapterQuestionId, negRiskOperatorQuestionId } = getDirectResolutionQuestionIds(market)
-    if (!adapterAddress || !adapterQuestionId || (market.neg_risk && !negRiskOperatorQuestionId)) {
-      setState('missing_request')
-      setMessage(t('This market is not ready for direct resolution yet.'))
+    // yes -> OUTCOME_YES (0), no -> OUTCOME_NO (1); the program enforces that
+    // only the condition authority may resolve.
+    const winningOutcome = selectedOutcome === 'yes' ? 0 : selectedOutcome === 'no' ? 1 : -1
+    if (winningOutcome < 0) {
+      setState('error')
+      setMessage(t('This outcome cannot be resolved on-chain.'))
       return
     }
 
     setState('pending')
     setMessage('')
     try {
-      const question = normalizeQuestionData(await publicClient.readContract({
-        address: adapterAddress,
-        abi: CTF_ADAPTER_QUESTION_ABI,
-        functionName: 'getQuestion',
-        args: [adapterQuestionId],
-      }))
-
-      if (!question || question.requestTimestamp === 0n || question.ancillaryData === '0x') {
-        setState('missing_request')
-        setMessage(t('This market is not ready for direct resolution yet.'))
-        return
-      }
-
-      if (question.resolved) {
-        setState('resolved')
-        setMessage(t('This market is already resolved.'))
-        return
-      }
-
-      const proposedPrice = getDirectResolutionPrice(selectedOutcome)
-      const hash = await runWithSignaturePrompt(() => market.neg_risk
-        ? walletClient.writeContract({
-            account: connectedAddress,
-            address: getDirectResolutionOracleAddress(),
-            abi: DIRECT_RESOLUTION_ORACLE_ABI,
-            functionName: 'proposeAndResolveNegRisk',
-            args: [
-              adapterAddress,
-              getDirectResolutionNegRiskOperatorAddress(),
-              adapterQuestionId,
-              negRiskOperatorQuestionId as Hex,
-              YES_OR_NO_IDENTIFIER,
-              question.requestTimestamp,
-              question.ancillaryData,
-              proposedPrice,
-            ],
-          })
-        : walletClient.writeContract({
-            account: connectedAddress,
-            address: getDirectResolutionOracleAddress(),
-            abi: DIRECT_RESOLUTION_ORACLE_ABI,
-            functionName: 'proposeAndResolve',
-            args: [
-              adapterAddress,
-              adapterQuestionId,
-              YES_OR_NO_IDENTIFIER,
-              question.requestTimestamp,
-              question.ancillaryData,
-              proposedPrice,
-            ],
-          }), {
+      await runWithSignaturePrompt(() => resolveConditional({
+        market: conditionId,
+        winningOutcome,
+      }), {
         title: t('Submit final result'),
         description: t('Open your wallet and approve the final result transaction.'),
       })
 
-      setMessage(t('Confirming transaction...'))
-      await publicClient.waitForTransactionReceipt({ hash })
       setState('submitted')
       setMessage(t('Result submitted. The market will update shortly.'))
       toast.success(t('Resolution submitted.'))
@@ -367,7 +224,7 @@ export default function DirectResolutionButton({
             {message && (
               <p className={cn(
                 'rounded-md border px-3 py-2 text-sm',
-                state === 'error' || state === 'not_whitelisted' || state === 'missing_request'
+                state === 'error'
                   ? 'border-destructive/30 bg-destructive/5 text-destructive'
                   : 'text-muted-foreground',
               )}
