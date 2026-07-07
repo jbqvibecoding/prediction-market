@@ -7,7 +7,6 @@ import { BadgeCheckIcon, Loader2Icon, LockKeyholeIcon, MoveDownIcon, MoveLeftIco
 import { useExtracted } from 'next-intl'
 import { useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { useSignTypedData } from 'wagmi'
 import { useTradingOnboarding } from '@/app/[locale]/(platform)/_providers/TradingOnboardingProvider'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -28,14 +27,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { DEPOSIT_WALLET_BALANCE_QUERY_KEY } from '@/hooks/useBalance'
 import { useIsMobile } from '@/hooks/useIsMobile'
-import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { MICRO_UNIT } from '@/lib/constants'
 import { formatAmountInputValue, formatCurrency, formatSharesLabel } from '@/lib/formatters'
 import { applyPositionDeltasToUserPositions, applyShareDeltas, updateQueryDataWhere } from '@/lib/optimistic-trading'
-import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
-import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
-import { buildConvertPositionsCall } from '@/lib/wallet/transactions'
 import { useUser } from '@/stores/useUser'
 
 interface ConvertPositionOption {
@@ -213,8 +208,6 @@ function EventConvertPositionsDialogContent({
   const { ensureTradingReady, openTradeRequirements } = useTradingOnboarding()
   const user = useUser()
   const isMobile = useIsMobile()
-  const { signTypedDataAsync } = useSignTypedData()
-  const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const checkboxBaseId = useId()
   const [amount, setAmount] = useState('0')
   const [step, setStep] = useState<'select' | 'review'>('select')
@@ -334,126 +327,11 @@ function EventConvertPositionsDialogContent({
       return
     }
 
-    setSubmitState('signing')
-
-    try {
-      const calls = [
-        buildConvertPositionsCall({
-          marketId: negRiskMarketId as `0x${string}`,
-          indexSet: selectedIndexSet,
-          amount: amountMicro.toString(),
-        }),
-      ]
-
-      setSubmitState('submitting')
-
-      const response = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCalls({
-        user,
-        calls,
-        metadata: 'convert_positions',
-        signTypedDataAsync,
-      }))
-      if (response?.error) {
-        if (isTradingAuthRequiredError(response.error)) {
-          onOpenChange(false)
-          openTradeRequirements({ forceTradingAuth: true })
-        }
-        else {
-          toast.error(response.error)
-        }
-        setSubmitState('idle')
-        return
-      }
-
-      toast.success(t('Convert Completed'), {
-        description: t('You have new shares'),
-        icon: <ConvertSuccessIcon />,
-      })
-
-      const optimisticDeltas = [
-        ...selectedOptions.map(option => ({
-          conditionId: option.conditionId,
-          outcomeIndex: 1 as const,
-          sharesDelta: -normalizedAmount,
-          currentPrice: 0.5,
-          title: option.label,
-          slug: option.conditionId,
-          eventSlug,
-          outcomeText: 'No',
-          isActive: true,
-          isResolved: false,
-        })),
-        ...conversionOutcomes.map(outcome => ({
-          conditionId: outcome.conditionId,
-          outcomeIndex: 0 as const,
-          sharesDelta: normalizedAmount,
-          avgPrice: 0.5,
-          currentPrice: 0.5,
-          title: outcome.label,
-          slug: outcome.conditionId,
-          eventSlug,
-          outcomeText: 'Yes',
-          isActive: true,
-          isResolved: false,
-        })),
-      ]
-      const affectedConditionIds = new Set(optimisticDeltas.map(delta => delta.conditionId))
-
-      updateQueryDataWhere<UserPosition[]>(
-        queryClient,
-        ['order-panel-user-positions'],
-        currentQueryKey => affectedConditionIds.has(String(currentQueryKey[2] ?? '')),
-        current => applyPositionDeltasToUserPositions(current, optimisticDeltas),
-      )
-      updateQueryDataWhere<UserPosition[]>(
-        queryClient,
-        ['user-market-positions'],
-        currentQueryKey =>
-          affectedConditionIds.has(String(currentQueryKey[2] ?? ''))
-          && currentQueryKey[3] === 'active',
-        current => applyPositionDeltasToUserPositions(current, optimisticDeltas),
-      )
-      updateQueryDataWhere<UserPosition[]>(
-        queryClient,
-        ['event-user-positions'],
-        currentQueryKey => currentQueryKey[2] === eventId,
-        current => applyPositionDeltasToUserPositions(current, optimisticDeltas),
-      )
-      updateQueryDataWhere<UserPosition[]>(
-        queryClient,
-        ['user-event-positions'],
-        currentQueryKey =>
-          currentQueryKey[2] === 'active'
-          && Array.from(affectedConditionIds).some(conditionId =>
-            String(currentQueryKey[3] ?? '').includes(conditionId),
-          ),
-        current => applyPositionDeltasToUserPositions(current, optimisticDeltas),
-      )
-      updateQueryDataWhere<SharesByCondition>(
-        queryClient,
-        ['user-conditional-shares'],
-        () => true,
-        current => applyShareDeltas(
-          current,
-          optimisticDeltas.map(delta => ({
-            conditionId: delta.conditionId,
-            outcomeIndex: delta.outcomeIndex,
-            sharesDelta: delta.sharesDelta,
-          })),
-        ),
-      )
-
-      void queryClient.invalidateQueries({ queryKey: [DEPOSIT_WALLET_BALANCE_QUERY_KEY] })
-
-      onOpenChange(false)
-    }
-    catch (error) {
-      console.error('Failed to submit convert operation.', error)
-      toast.error(t('We could not submit your convert request. Please try again.'))
-    }
-    finally {
-      setSubmitState('idle')
-    }
+    // Solana: neg-risk "convert" is an EVM CTF-adapter deposit-wallet flow with
+    // no Solana equivalent, so it is disabled (this dialog is also unreachable —
+    // convert options are never offered). Removed with viem in G.
+    toast.info(t('Convert is not available.'))
+    setSubmitState('idle')
   }
 
   const selectContent = (
