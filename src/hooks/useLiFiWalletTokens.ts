@@ -1,6 +1,6 @@
 import type { ChainId, ExtendedChain, TokensExtendedResponse, WalletTokenExtended } from '@lifi/sdk'
 import { useQuery } from '@tanstack/react-query'
-import { formatUnits } from 'viem'
+import { formatUnits } from '@/lib/eth-utils'
 
 const LIFI_WALLET_TOKENS_QUERY_KEY = 'lifi-wallet-tokens'
 

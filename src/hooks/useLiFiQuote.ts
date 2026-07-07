@@ -1,6 +1,6 @@
 import type { LiFiWalletTokenItem } from '@/hooks/useLiFiWalletTokens'
 import { useQuery } from '@tanstack/react-query'
-import { parseUnits } from 'viem'
+import { parseUnits } from '@/lib/eth-utils'
 import { sanitizeLiFiAmount } from '@/lib/lifi-amount'
 
 const LIFI_QUOTE_QUERY_KEY = 'lifi-quote'

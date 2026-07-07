@@ -1,11 +1,17 @@
-import type { PublicClient } from 'viem'
+'use client'
+
 import type { Event } from '@/types'
+import { useConnection, useWallet } from '@solana/wallet-adapter-react'
+import { PublicKey } from '@solana/web3.js'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useRef } from 'react'
-import { createPublicClient, erc1155Abi, http } from 'viem'
-import { MICRO_UNIT, OUTCOME_INDEX } from '@/lib/constants'
-import { CONDITIONAL_TOKENS_CONTRACT } from '@/lib/contracts'
-import { defaultViemNetwork, defaultViemRpcUrl } from '@/lib/viem-network'
+import { useMemo } from 'react'
+import { OUTCOME_INDEX } from '@/lib/constants'
+import {
+  associatedTokenAddress,
+  deriveCondition,
+  deriveNoMint,
+  deriveYesMint,
+} from '@/lib/solana/conditional-token'
 
 export interface SharesByCondition {
   [conditionId: string]: {
@@ -16,87 +22,80 @@ export interface SharesByCondition {
 
 interface UseUserShareBalancesOptions {
   event?: Event
-  ownerAddress?: `0x${string}` | null
+  /** Legacy EVM owner; ignored on Solana (connected wallet is used). */
+  ownerAddress?: string | null
 }
 
-function createBrowserPublicClient(): PublicClient {
-  return createPublicClient({
-    chain: defaultViemNetwork,
-    transport: http(defaultViemRpcUrl),
-  })
-}
-
-function normalizeSharesFromBalance(balance: bigint): number {
-  if (balance <= 0n) {
+async function readUiAmount(
+  connection: ReturnType<typeof useConnection>['connection'],
+  ata: PublicKey,
+): Promise<number> {
+  try {
+    const result = await connection.getTokenAccountBalance(ata)
+    return result.value.uiAmount ?? 0
+  }
+  catch {
+    // ATA not created yet -> zero shares.
     return 0
   }
-
-  const decimalValue = Number(balance) / MICRO_UNIT
-  return Math.max(0, Math.floor(decimalValue * MICRO_UNIT) / MICRO_UNIT)
 }
 
-export function useUserShareBalances({ event, ownerAddress }: UseUserShareBalancesOptions) {
-  const clientRef = useRef<PublicClient | null>(null)
-  if (clientRef.current === null && typeof window !== 'undefined') {
-    clientRef.current = createBrowserPublicClient()
-  }
-  const client = clientRef.current
+/**
+ * The connected wallet's YES/NO outcome-token balances per market condition,
+ * read from the Solana conditional-token program's SPL mints. Replaces the EVM
+ * ERC-1155 balanceOfBatch read.
+ */
+export function useUserShareBalances({ event }: UseUserShareBalancesOptions) {
+  const { connection } = useConnection()
+  const { publicKey } = useWallet()
+  const owner = publicKey?.toBase58() ?? null
 
-  const outcomeDescriptors = useMemo(() => {
+  const conditionIds = useMemo(() => {
     if (!event?.markets?.length) {
       return []
     }
-
-    return event.markets.flatMap(market =>
-      market.outcomes.map(outcome => ({
-        conditionId: market.condition_id,
-        outcomeIndex: outcome.outcome_index ?? OUTCOME_INDEX.YES,
-        tokenId: outcome.token_id,
-      })),
+    return Array.from(
+      new Set(event.markets.map(market => market.condition_id).filter(Boolean)),
     )
   }, [event])
 
-  const descriptorKey = useMemo(() => outcomeDescriptors.map(descriptor => `${descriptor.conditionId}:${descriptor.tokenId}`).join('|'), [outcomeDescriptors])
+  const descriptorKey = conditionIds.join('|')
 
   const query = useQuery({
-    queryKey: ['user-conditional-shares', ownerAddress, event?.slug, descriptorKey],
-    enabled: Boolean(client && ownerAddress && outcomeDescriptors.length),
+    queryKey: ['user-conditional-shares', owner, event?.slug, descriptorKey],
+    enabled: Boolean(owner && conditionIds.length),
     staleTime: 10_000,
     gcTime: 5 * 60 * 1000,
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
     queryFn: async (): Promise<SharesByCondition> => {
-      if (!client || !ownerAddress || !outcomeDescriptors.length) {
+      if (!owner || !conditionIds.length) {
         return {}
       }
+      const ownerPk = new PublicKey(owner)
+      const acc: SharesByCondition = {}
 
-      const owners = outcomeDescriptors.map(() => ownerAddress)
-      const tokenIds = outcomeDescriptors.map(descriptor => BigInt(descriptor.tokenId))
-
-      const balances = await client.readContract({
-        address: CONDITIONAL_TOKENS_CONTRACT,
-        abi: erc1155Abi,
-        functionName: 'balanceOfBatch',
-        args: [owners, tokenIds],
-      }) as bigint[]
-
-      return outcomeDescriptors.reduce<SharesByCondition>((acc, descriptor, index) => {
-        const normalizedShares = normalizeSharesFromBalance(balances[index] ?? 0n)
-
-        if (!acc[descriptor.conditionId]) {
-          acc[descriptor.conditionId] = {
-            [OUTCOME_INDEX.YES]: 0,
-            [OUTCOME_INDEX.NO]: 0,
-          }
+      await Promise.all(conditionIds.map(async (conditionId) => {
+        let market: PublicKey
+        try {
+          market = new PublicKey(conditionId)
         }
+        catch {
+          // condition_id is not a valid Solana pubkey -> skip.
+          return
+        }
+        const condition = deriveCondition(market)
+        const [yes, no] = await Promise.all([
+          readUiAmount(connection, associatedTokenAddress(deriveYesMint(condition), ownerPk)),
+          readUiAmount(connection, associatedTokenAddress(deriveNoMint(condition), ownerPk)),
+        ])
+        acc[conditionId] = {
+          [OUTCOME_INDEX.YES]: yes,
+          [OUTCOME_INDEX.NO]: no,
+        }
+      }))
 
-        const outcomeKey = descriptor.outcomeIndex === OUTCOME_INDEX.NO
-          ? OUTCOME_INDEX.NO
-          : OUTCOME_INDEX.YES
-
-        acc[descriptor.conditionId][outcomeKey] = normalizedShares
-        return acc
-      }, {})
+      return acc
     },
   })
 

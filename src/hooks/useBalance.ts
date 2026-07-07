@@ -1,11 +1,10 @@
-import type { Address, PublicClient } from 'viem'
+'use client'
+
+import { useConnection, useWallet } from '@solana/wallet-adapter-react'
+import { PublicKey } from '@solana/web3.js'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useRef } from 'react'
-import { createPublicClient, getContract, http } from 'viem'
-import { COLLATERAL_TOKEN_ADDRESS } from '@/lib/contracts'
-import { defaultViemNetwork, defaultViemRpcUrl } from '@/lib/viem-network'
-import { normalizeAddress } from '@/lib/wallet'
-import { useUser } from '@/stores/useUser'
+import { associatedTokenAddress } from '@/lib/solana/conditional-token'
+import { getSolanaConfig } from '@/lib/solana/config'
 
 interface Balance {
   raw: number
@@ -15,13 +14,6 @@ interface Balance {
 
 export const DEPOSIT_WALLET_BALANCE_QUERY_KEY = 'deposit-wallet-usdc-balance'
 
-const USDC_DECIMALS = 6
-const ERC20_ABI = [
-  { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }] },
-  { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
-  { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
-  { type: 'function', name: 'name', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
-]
 const INITIAL_STATE: Balance = {
   raw: 0.0,
   text: '0.00',
@@ -30,46 +22,21 @@ const INITIAL_STATE: Balance = {
 
 interface UseBalanceOptions {
   enabled?: boolean
+  /** Legacy EVM deposit-wallet option; ignored on Solana (connected wallet is used). */
   depositWalletAddress?: string | null
 }
 
-function createBrowserPublicClient(): PublicClient {
-  return createPublicClient({
-    chain: defaultViemNetwork,
-    transport: http(defaultViemRpcUrl),
-  })
-}
-
+/**
+ * USDC balance of the connected Solana wallet (its collateral-mint associated
+ * token account). Replaces the EVM ERC-20 balanceOf read on the deposit wallet.
+ */
 export function useBalance(options: UseBalanceOptions = {}) {
-  const user = useUser()
-  const clientRef = useRef<PublicClient | null>(null)
-  if (clientRef.current === null && typeof window !== 'undefined') {
-    clientRef.current = createBrowserPublicClient()
-  }
-  const client = clientRef.current
-
-  const sourceDepositWalletAddress = Object.hasOwn(options, 'depositWalletAddress')
-    ? options.depositWalletAddress
-    : user?.deposit_wallet_address
-
-  const depositWalletAddress: Address | null = sourceDepositWalletAddress
-    ? normalizeAddress(sourceDepositWalletAddress) as Address | null
-    : null
-
-  const contract = useMemo(() => {
-    if (!client || !depositWalletAddress) {
-      return null
-    }
-
-    return getContract({
-      address: COLLATERAL_TOKEN_ADDRESS,
-      abi: ERC20_ABI,
-      client,
-    })
-  }, [client, depositWalletAddress])
+  const { connection } = useConnection()
+  const { publicKey } = useWallet()
+  const owner = publicKey?.toBase58() ?? null
 
   const isOptionsEnabled = options.enabled ?? true
-  const isQueryEnabled = Boolean(client && depositWalletAddress && isOptionsEnabled)
+  const isQueryEnabled = Boolean(owner && isOptionsEnabled)
 
   const {
     data,
@@ -77,28 +44,29 @@ export function useBalance(options: UseBalanceOptions = {}) {
     isLoading,
     refetch,
   } = useQuery({
-    queryKey: [DEPOSIT_WALLET_BALANCE_QUERY_KEY, depositWalletAddress],
+    queryKey: [DEPOSIT_WALLET_BALANCE_QUERY_KEY, owner],
     enabled: isQueryEnabled,
     staleTime: 'static',
     gcTime: 5 * 60 * 1000,
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
     queryFn: async (): Promise<Balance> => {
-      if (!client || !depositWalletAddress || !contract) {
+      if (!owner) {
         return INITIAL_STATE
       }
-
       try {
-        const balanceRaw = await contract.read.balanceOf([depositWalletAddress])
-        const balanceNumber = Number(balanceRaw) / 10 ** USDC_DECIMALS
-
+        const { collateralMint } = getSolanaConfig()
+        const ata = associatedTokenAddress(new PublicKey(collateralMint), new PublicKey(owner))
+        const result = await connection.getTokenAccountBalance(ata)
+        const raw = result.value.uiAmount ?? 0
         return {
-          raw: balanceNumber,
-          text: balanceNumber.toFixed(2),
+          raw,
+          text: raw.toFixed(2),
           symbol: 'USDC',
         }
       }
       catch {
+        // ATA not yet created / RPC error -> treat as zero balance.
         return INITIAL_STATE
       }
     },
