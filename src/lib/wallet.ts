@@ -1,18 +1,13 @@
-import { UserRejectedRequestError } from 'viem'
-
 export function isUserRejectedRequestError(error: unknown): boolean {
-  if (error instanceof UserRejectedRequestError) {
-    return true
-  }
-
   if (typeof error === 'object' && error !== null) {
     const name = 'name' in error ? (error as { name?: string }).name : undefined
-    if (name === 'UserRejectedRequestError') {
+    // viem UserRejectedRequestError (legacy) or Solana wallet-adapter rejections.
+    if (name === 'UserRejectedRequestError' || name === 'WalletSignTransactionError') {
       return true
     }
 
     const message = 'message' in error ? (error as { message?: string }).message : undefined
-    if (typeof message === 'string' && message.toLowerCase().includes('user rejected')) {
+    if (typeof message === 'string' && /user rejected|user denied|rejected the request/i.test(message)) {
       return true
     }
   }
