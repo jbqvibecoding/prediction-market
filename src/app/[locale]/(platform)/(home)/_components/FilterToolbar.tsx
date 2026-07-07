@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react'
 import type { FilterSettings } from '@/app/[locale]/(platform)/(home)/_components/filter-toolbar-settings'
 import type { FilterState } from '@/app/[locale]/(platform)/_providers/FilterProvider'
-import { useAppKitAccount } from '@reown/appkit/react'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { BookmarkIcon, Settings2Icon } from 'lucide-react'
 import { useExtracted } from 'next-intl'
 import { useCallback, useMemo, useState } from 'react'
@@ -45,7 +45,7 @@ function useFilterToolbarState({
   onFiltersChange: (filters: Partial<FilterState>) => void
 }) {
   const { open } = useAppKit()
-  const { isConnected } = useAppKitAccount()
+  const { isConnected } = useWalletConnection()
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   const filterSettings = useMemo(() => createDefaultFilters({

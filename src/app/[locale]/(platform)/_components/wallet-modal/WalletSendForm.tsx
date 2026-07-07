@@ -2,7 +2,6 @@
 
 import type { ChangeEventHandler, FormEventHandler } from 'react'
 import type { PendingWithdrawalItem } from '@/app/[locale]/(platform)/_components/wallet-modal/utils'
-import { useAppKitAccount } from '@reown/appkit/react'
 import {
   ArrowLeftIcon,
   ChevronRightIcon,
@@ -59,8 +58,8 @@ function WalletSendForm({
   const [receiveChain, setReceiveChain] = useState<string>('Polygon')
   const [isBreakdownOpen, setIsBreakdownOpen] = useState(false)
   const inputValue = formatDisplayAmount(sendAmount)
-  const appKitAccount = useAppKitAccount()
-  const isEmbeddedWallet = Boolean(appKitAccount.embeddedWalletInfo)
+  // Solana wallet adapters have no embedded (email/social) wallet concept.
+  const isEmbeddedWallet = false
   const isSubmitDisabled = (
     isSending
     || !trimmedRecipient

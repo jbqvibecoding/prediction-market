@@ -7,7 +7,7 @@ import type {
   PredictionResultsStatusOption,
 } from '@/lib/prediction-results-filters'
 import type { Event, Market } from '@/types'
-import { useAppKitAccount } from '@reown/appkit/react'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { BookmarkIcon, CheckIcon, ChevronRightIcon, Clock3Icon, FlameIcon, MessageCircleIcon, SearchIcon, Settings2Icon, XIcon } from 'lucide-react'
 import { useExtracted, useLocale } from 'next-intl'
@@ -464,7 +464,7 @@ export default function PredictionResultsClient({
   const t = useExtracted()
   const locale = useLocale()
   const { open } = useAppKit()
-  const { isConnected } = useAppKitAccount()
+  const { isConnected } = useWalletConnection()
   const pathname = usePathname()
   const router = useRouter()
   const routeScopeKey = `${routeMainTag}:${routeTag}:${initialQuery}`
