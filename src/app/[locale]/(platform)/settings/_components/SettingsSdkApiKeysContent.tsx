@@ -10,7 +10,6 @@ import {
 import { useExtracted } from 'next-intl'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { useAccount, useSignTypedData } from 'wagmi'
 import {
   generateSdkApiKeyAction,
   getNextSdkApiKeyNonceAction,
@@ -34,7 +33,6 @@ import {
   DrawerTitle,
 } from '@/components/ui/drawer'
 import { Textarea } from '@/components/ui/textarea'
-import { useAppKit } from '@/hooks/useAppKit'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import {
@@ -55,62 +53,24 @@ type SdkKeyOperation = 'generate' | 'revoke'
 export default function SettingsSdkApiKeysContent() {
   const t = useExtracted()
   const isMobile = useIsMobile()
-  const account = useAccount()
-  const { open: openAppKit, isReady: isAppKitReady } = useAppKit()
-  const { signTypedDataAsync } = useSignTypedData()
-  const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const [credentials, setCredentials] = useState<SdkApiKeyBundle | null>(null)
   const [pendingOperation, setPendingOperation] = useState<SdkKeyOperation | null>(null)
   const [credentialsDialogOpen, setCredentialsDialogOpen] = useState(false)
-  const normalizedConnectedAddress = normalizeAddress(account.address)
+  // Solana: SDK API keys were authorized with an EVM wallet typed-data
+  // signature. Disabled until the backend accepts Solana signatures.
+  const normalizedConnectedAddress: string | null = null
   const isPending = pendingOperation !== null
   const hasCredentials = hasSdkApiKeyCredentials(credentials)
 
   async function ensureWalletReady() {
-    if (!normalizedConnectedAddress) {
-      if (isAppKitReady) {
-        await openAppKit()
-      }
-      else {
-        toast.error(t('Wallet connection is not ready. Please try again.'))
-      }
-      return false
-    }
-
-    return true
+    toast.error(t('SDK API keys are not available yet.'))
+    return false
   }
 
-  async function signSdkKeyRequest(nonce: string): Promise<SdkApiKeyActionPayload | null> {
-    if (!normalizedConnectedAddress) {
-      return null
-    }
-
-    const timestamp = Math.floor(Date.now() / 1000).toString()
-    const message = buildTradingAuthMessage({
-      address: normalizedConnectedAddress,
-      timestamp,
-      nonce,
-    })
-
-    const signature = await runWithSignaturePrompt(
-      () => signTypedDataAsync({
-        domain: getTradingAuthDomain(),
-        types: TRADING_AUTH_TYPES,
-        primaryType: TRADING_AUTH_PRIMARY_TYPE,
-        message,
-      }),
-      {
-        title: t('Approve SDK key request'),
-        description: t('Open your wallet and approve the signature to manage your SDK key.'),
-      },
-    )
-
-    return {
-      address: normalizedConnectedAddress,
-      signature,
-      timestamp,
-      nonce,
-    }
+  async function signSdkKeyRequest(_nonce: string): Promise<SdkApiKeyActionPayload | null> {
+    // Solana: SDK key requests were signed with EVM typed data; disabled until
+    // the backend accepts Solana signatures.
+    return null
   }
 
   async function handleGenerateKey() {

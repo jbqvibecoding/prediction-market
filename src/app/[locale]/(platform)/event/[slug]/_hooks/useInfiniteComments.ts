@@ -1,12 +1,9 @@
 import type { Comment, User } from '@/types'
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
-import { useSignMessage } from 'wagmi'
 import { commentMetricsQueryKey } from '@/app/[locale]/(platform)/event/[slug]/_hooks/useCommentMetrics'
-import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import {
   clearCommunityAuth,
-  ensureCommunityToken,
   loadCommunityAuth,
   parseCommunityError,
 } from '@/lib/community-auth'
@@ -40,8 +37,6 @@ export function useInfiniteComments(
   holdersOnly = false,
 ) {
   const queryClient = useQueryClient()
-  const { signMessageAsync } = useSignMessage()
-  const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const [infiniteScrollError, setInfiniteScrollError] = useState<Error | null>(null)
   const [loadingRepliesForComment, setLoadingRepliesForComment] = useState<string | null>(null)
   const [pendingLikeIds, setPendingLikeIds] = useState<Set<string>>(() => new Set())
@@ -50,18 +45,11 @@ export function useInfiniteComments(
   const commentsQueryKey = ['event-comments', eventSlug, sortBy, holdersOnly, userAddress]
   const communityApiUrl = process.env.COMMUNITY_URL!
 
-  const getCommunityToken = useCallback(async () => {
-    if (!userAddress) {
-      throw new Error('Connect your wallet to comment')
-    }
-
-    return await ensureCommunityToken({
-      address: userAddress,
-      signMessageAsync: args => runWithSignaturePrompt(() => signMessageAsync(args)),
-      communityApiUrl,
-      depositWalletAddress: userDepositWalletAddress,
-    })
-  }, [communityApiUrl, runWithSignaturePrompt, signMessageAsync, userAddress, userDepositWalletAddress])
+  const getCommunityToken = useCallback(async (): Promise<string> => {
+    // Solana: community sign-in used EVM wallet message signing. It is disabled
+    // until the community backend accepts Solana (ed25519) signatures.
+    throw new Error('Community features are not available yet.')
+  }, [])
 
   const fetchCommentsPage = useCallback(async ({ pageParam = 0 }: { pageParam: number }) => {
     const offset = pageParam * COMMENTS_PAGE_SIZE

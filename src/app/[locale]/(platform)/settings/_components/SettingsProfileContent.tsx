@@ -6,7 +6,6 @@ import { useExtracted } from 'next-intl'
 import Image from 'next/image'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useSignMessage } from 'wagmi'
 import { updateUserAction } from '@/app/[locale]/(platform)/settings/_actions/update-profile'
 import AppLink from '@/components/AppLink'
 import { Button } from '@/components/ui/button'
@@ -56,8 +55,6 @@ function isSelectedImageFile(value: FormDataEntryValue | null): value is File {
 export default function SettingsProfileContent({ user }: { user: User }) {
   const t = useExtracted()
   const queryClient = useQueryClient()
-  const { signMessageAsync } = useSignMessage()
-  const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const communityApiUrl = process.env.COMMUNITY_URL!
   const { errors, setErrors, formError, setFormError, isPending, setIsPending, fileInputRef } = useProfileFormState()
   const { previewImage, setPreviewImage } = useAvatarPreview()
@@ -102,73 +99,14 @@ export default function SettingsProfileContent({ user }: { user: User }) {
     const currentUsername = user.username?.trim() ?? ''
     const hasUsernameChange = username.length > 0 && username !== currentUsername
 
-    let shouldUpdateCommunity = hasUsernameChange || Boolean(selectedImageFile)
-    let forceCommunityAuthRefresh = false
-
-    let communityUsername = username
-    let updatedAvatarUrl: string | undefined
+    // Solana: community profile sync (username/avatar) used EVM wallet message
+    // signing and is disabled until the community backend accepts Solana
+    // signatures. The local profile (email + username) still saves below;
+    // avatar upload via the community backend is unavailable in the meantime.
+    const communityUsername = username
+    const updatedAvatarUrl: string | undefined = undefined
 
     try {
-      if (username.length > 0) {
-        try {
-          const communityProfile = await fetchCommunityProfileByAddress({
-            communityApiUrl,
-            address: user.address,
-            signal: AbortSignal.timeout(8_000),
-          })
-          const remoteUsername = communityProfile?.username?.trim() ?? ''
-          const remoteDepositWallet = communityProfile?.deposit_wallet_address?.trim().toLowerCase() ?? ''
-          const localDepositWallet = user.deposit_wallet_address?.trim().toLowerCase() ?? ''
-          const usernameOutOfSync = remoteUsername !== username
-          const walletOutOfSync = Boolean(localDepositWallet && remoteDepositWallet !== localDepositWallet)
-
-          if (!communityProfile || usernameOutOfSync || walletOutOfSync) {
-            shouldUpdateCommunity = true
-            forceCommunityAuthRefresh = walletOutOfSync
-          }
-        }
-        catch (error) {
-          console.error('Failed to inspect community profile before settings save', error)
-        }
-      }
-
-      if (shouldUpdateCommunity) {
-        const token = await ensureCommunityToken({
-          address: user.address,
-          signMessageAsync: args => runWithSignaturePrompt(() => signMessageAsync(args)),
-          communityApiUrl,
-          depositWalletAddress: user.deposit_wallet_address ?? null,
-          forceRefresh: forceCommunityAuthRefresh,
-        })
-
-        const response = await updateCommunityProfile({
-          communityApiUrl,
-          token,
-          username,
-          image: selectedImageFile,
-        })
-
-        if (response.status === 401) {
-          clearCommunityAuth()
-        }
-
-        if (!response.ok) {
-          const message = await parseCommunityError(response, t('Failed to update profile.'))
-          setFormError(message)
-          toast.error(message)
-          return
-        }
-
-        const payload = await response.json() as {
-          username?: string
-          avatar_url?: string
-        }
-        communityUsername = payload.username || username
-        if (selectedImageFile) {
-          updatedAvatarUrl = payload.avatar_url?.trim() || undefined
-        }
-      }
-
       const localForm = new FormData()
       if (emailValue) {
         localForm.set('email', emailValue)
