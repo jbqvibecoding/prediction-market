@@ -12,7 +12,6 @@ import { useExtracted, useLocale } from 'next-intl'
 import Form from 'next/form'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useSignTypedData } from 'wagmi'
 import { useTradingOnboarding } from '@/app/[locale]/(platform)/_providers/TradingOnboardingProvider'
 import { useOrderBookSummaries } from '@/app/[locale]/(platform)/event/[slug]/_components/EventOrderBook'
 import EventOrderPanelBuySellTabs from '@/app/[locale]/(platform)/event/[slug]/_components/EventOrderPanelBuySellTabs'
@@ -72,11 +71,11 @@ import { resolveOrderExpirationTimestamp } from '@/lib/orders/expiration'
 import { MIN_LIMIT_ORDER_SHARES, validateOrder } from '@/lib/orders/validation'
 import { SIDE_BUY, SIDE_SELL } from '@/lib/solana/order'
 import { centsToPriceMicro, sharesToBaseUnits } from '@/lib/solana/order-panel'
+import { getSolanaConfig } from '@/lib/solana/config'
+import { useConditionalToken } from '@/hooks/useConditionalToken'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
 import { isUserRejectedRequestError, normalizeAddress } from '@/lib/wallet'
-import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
-import { buildNegRiskRedeemPositionCall, buildRedeemPositionCall } from '@/lib/wallet/transactions'
 import { useNotifications } from '@/stores/useNotifications'
 import { useAmountAsNumber, useIsLimitOrder, useNoPrice, useOrder, useYesPrice } from '@/stores/useOrder'
 import { useUser } from '@/stores/useUser'
@@ -812,7 +811,7 @@ export default function EventOrderPanelForm({
 }: EventOrderPanelFormProps) {
   const { open } = useAppKit()
   const { isConnected } = useAppKitAccount()
-  const { signTypedDataAsync } = useSignTypedData()
+  const { redeem: redeemConditionalToken } = useConditionalToken()
   const { placeOrder: placeSolanaOrder } = useSolanaClob()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const t = useExtracted()
@@ -1604,33 +1603,18 @@ export default function EventOrderPanelForm({
     setIsClaimSubmitting(true)
 
     try {
-      const call = isNegRiskMarket
-        ? buildNegRiskRedeemPositionCall({
-            conditionId: conditionId as `0x${string}`,
-            yesAmount: claimableNegRiskAmounts.yesShares,
-            noAmount: claimableNegRiskAmounts.noShares,
-            contract: negRiskAdapterAddress ?? undefined,
-          })
-        : buildRedeemPositionCall({
-            conditionId: conditionId as `0x${string}`,
-            indexSets: claimIndexSets,
-          })
-      const response = await runWithSignaturePrompt(() => signAndSubmitDepositWalletCalls({
-        user,
-        calls: [call],
-        metadata: 'redeem_positions',
-        signTypedDataAsync,
-      }))
-
-      if (response?.error) {
-        if (isTradingAuthRequiredError(response.error)) {
-          openTradeRequirements({ forceTradingAuth: true })
-        }
-        else {
-          toast.error(response.error)
-        }
+      // Solana: burn the winning outcome token -> unlock collateral.
+      const winningOutcome = resolvedOutcomeIndex
+      if (winningOutcome !== OUTCOME_INDEX.YES && winningOutcome !== OUTCOME_INDEX.NO) {
+        toast.info(t('No claimable winnings available for this market.'))
         return
       }
+      await runWithSignaturePrompt(() => redeemConditionalToken({
+        market: conditionId,
+        collateralMint: getSolanaConfig().collateralMint,
+        amount: sharesToBaseUnits(claimableShares),
+        winningOutcome,
+      }))
 
       toast.success(t('Claim submitted'), {
         description: t('We sent your claim transaction.'),

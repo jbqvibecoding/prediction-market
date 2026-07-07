@@ -6,7 +6,6 @@ import type { ConditionShares } from '@/app/[locale]/(platform)/profile/_types/P
 import type { User } from '@/types'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
-import { useSignTypedData } from 'wagmi'
 import { fetchLockedSharesByCondition } from '@/app/[locale]/(platform)/profile/_utils/PublicPositionsUtils'
 import { DEPOSIT_WALLET_BALANCE_QUERY_KEY } from '@/hooks/useBalance'
 import { useConditionalToken } from '@/hooks/useConditionalToken'
@@ -19,8 +18,6 @@ import { getSolanaConfig } from '@/lib/solana/config'
 import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { normalizeAddress } from '@/lib/wallet'
-import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
-import { buildMergePositionCall } from '@/lib/wallet/transactions'
 import { useNotifications } from '@/stores/useNotifications'
 
 interface UseMergePositionsActionOptions {
@@ -48,7 +45,6 @@ export function useMergePositionsAction({
   const [mergeBatchCount, setMergeBatchCount] = useState(0)
   const addLocalOrderFillNotification = useNotifications(state => state.addLocalOrderFillNotification)
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
-  const { signTypedDataAsync } = useSignTypedData()
   const { merge: mergeConditionalToken } = useConditionalToken()
 
   const handleMergeAll = useCallback(async () => {
@@ -223,7 +219,6 @@ export function useMergePositionsAction({
     positionsByCondition,
     queryClient,
     runWithSignaturePrompt,
-    signTypedDataAsync,
     addLocalOrderFillNotification,
     user,
   ])
