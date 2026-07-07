@@ -5,7 +5,6 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDownIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { useSignTypedData } from 'wagmi'
 import { useTradingOnboarding } from '@/app/[locale]/(platform)/_providers/TradingOnboardingProvider'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -22,14 +21,6 @@ import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
 import { normalizeAddress } from '@/lib/wallet'
-import {
-  DepositWalletCallItemsSplitFallbackError,
-  signAndSubmitDepositWalletCallItemsWithSplitFallback,
-} from '@/lib/wallet/client'
-import {
-  buildNegRiskRedeemPositionCall,
-  buildRedeemPositionCall,
-} from '@/lib/wallet/transactions'
 import { useUser } from '@/stores/useUser'
 
 interface SportsRedeemModalPosition {
@@ -307,7 +298,6 @@ function useRedeemClaimSubmission({
 }) {
   const user = useUser()
   const queryClient = useQueryClient()
-  const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const { redeem: redeemConditionalToken } = useConditionalToken()
   const { ensureTradingReady, openTradeRequirements, promptAutoRedeem } = useTradingOnboarding()

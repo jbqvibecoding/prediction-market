@@ -10,7 +10,6 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { useSignTypedData } from 'wagmi'
 import { useTradingOnboarding } from '@/app/[locale]/(platform)/_providers/TradingOnboardingProvider'
 import AppLink from '@/components/AppLink'
 import EventIconImage from '@/components/EventIconImage'
@@ -33,14 +32,6 @@ import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn, triggerConfetti } from '@/lib/utils'
 import { normalizeAddress } from '@/lib/wallet'
-import {
-  DepositWalletCallItemsSplitFallbackError,
-  signAndSubmitDepositWalletCallItemsWithSplitFallback,
-} from '@/lib/wallet/client'
-import {
-  buildNegRiskRedeemPositionCall,
-  buildRedeemPositionCall,
-} from '@/lib/wallet/transactions'
 import { useUser } from '@/stores/useUser'
 
 export interface PortfolioClaimMarket {
@@ -211,7 +202,6 @@ export default function PortfolioMarketsWonCardClient({ data }: PortfolioMarkets
     markLocallyClaimedConditionIds,
   } = useMarketsWonClaimState()
   const { ensureTradingReady, openTradeRequirements, promptAutoRedeem } = useTradingOnboarding()
-  const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const { redeem: redeemConditionalToken } = useConditionalToken()
   const queryClient = useQueryClient()

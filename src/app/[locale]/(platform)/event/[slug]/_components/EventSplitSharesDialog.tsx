@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useExtracted } from 'next-intl'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { useSignTypedData } from 'wagmi'
 import { useTradingOnboarding } from '@/app/[locale]/(platform)/_providers/TradingOnboardingProvider'
 import { Button } from '@/components/ui/button'
 import {
@@ -35,11 +34,6 @@ import { getSolanaConfig } from '@/lib/solana/config'
 import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { cn } from '@/lib/utils'
-import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
-import {
-  buildNegRiskSplitPositionCall,
-  buildSplitPositionCall,
-} from '@/lib/wallet/transactions'
 import { useNotifications } from '@/stores/useNotifications'
 import { useUser } from '@/stores/useUser'
 
@@ -105,7 +99,6 @@ export default function EventSplitSharesDialog({
   const user = useUser()
   const addLocalOrderFillNotification = useNotifications(state => state.addLocalOrderFillNotification)
   const isMobile = useIsMobile()
-  const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const { split: splitConditionalToken } = useConditionalToken()
   const { amount, setAmount, error, setError, isSubmitting, setIsSubmitting } = useSplitFormState()
