@@ -5,7 +5,6 @@ import { useExtracted } from 'next-intl'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { isAddress } from 'viem'
-import { useSignTypedData } from 'wagmi'
 import { WalletDepositModal, WalletWithdrawModal } from '@/app/[locale]/(platform)/_components/WalletModal'
 import { useTradingOnboarding } from '@/app/[locale]/(platform)/_providers/TradingOnboardingProvider'
 import { useBalance } from '@/hooks/useBalance'
@@ -22,8 +21,6 @@ import { isSolanaAddress } from '@/lib/solana/auth'
 import { getSolanaConfig } from '@/lib/solana/config'
 import { sharesToBaseUnits } from '@/lib/solana/order-panel'
 import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
-import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
-import { buildSendErc20Call } from '@/lib/wallet/transactions'
 
 type DepositView = 'fund' | 'receive' | 'wallets' | 'amount' | 'confirm' | 'success'
 
@@ -140,7 +137,6 @@ function useWalletSendHandler({
   handleWithdrawModalChange,
   openTradeRequirements,
   runWithSignaturePrompt,
-  signTypedDataAsync,
   messages,
 }: {
   user: WalletFlowProps['user']
@@ -153,7 +149,6 @@ function useWalletSendHandler({
   handleWithdrawModalChange: (next: boolean) => void
   openTradeRequirements: ReturnType<typeof useTradingOnboarding>['openTradeRequirements']
   runWithSignaturePrompt: ReturnType<typeof useSignaturePromptRunner>['runWithSignaturePrompt']
-  signTypedDataAsync: ReturnType<typeof useSignTypedData>['signTypedDataAsync']
   messages: WalletSendMessages
 }) {
   const { transfer, connected } = useSplTransfer()
@@ -292,7 +287,6 @@ export function WalletFlow({
 }: WalletFlowProps) {
   const isMobile = useIsMobile()
   const t = useExtracted()
-  const { signTypedDataAsync } = useSignTypedData()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const { depositView, setDepositView, handleDepositModalChange } = useDepositViewState(onDepositOpenChange)
   const {
@@ -335,7 +329,6 @@ export function WalletFlow({
     handleWithdrawModalChange,
     openTradeRequirements,
     runWithSignaturePrompt,
-    signTypedDataAsync,
     messages: walletSendMessages,
   })
 

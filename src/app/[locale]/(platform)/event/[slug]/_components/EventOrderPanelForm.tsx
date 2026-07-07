@@ -6,7 +6,7 @@ import type {
 } from '@/app/[locale]/(platform)/event/[slug]/_types/EventOrderPanelTypes'
 import type { PortfolioUserOpenOrder } from '@/app/[locale]/(platform)/portfolio/_types/PortfolioOpenOrdersTypes'
 import type { Event, Market, Outcome, UserPosition } from '@/types'
-import { useAppKitAccount } from '@reown/appkit/react'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { useQueryClient } from '@tanstack/react-query'
 import { useExtracted, useLocale } from 'next-intl'
 import Form from 'next/form'
@@ -810,7 +810,7 @@ export default function EventOrderPanelForm({
   optimisticallyClaimedConditionIds = {},
 }: EventOrderPanelFormProps) {
   const { open } = useAppKit()
-  const { isConnected } = useAppKitAccount()
+  const { isConnected } = useWalletConnection()
   const { redeem: redeemConditionalToken } = useConditionalToken()
   const { placeOrder: placeSolanaOrder } = useSolanaClob()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()

@@ -7,11 +7,10 @@ import type { PublicPosition } from './PublicPositionItem'
 import type { SortDirection, SortOption } from '@/app/[locale]/(platform)/profile/_types/PublicPositionsTypes'
 import type { NormalizedBookLevel } from '@/lib/order-panel-utils'
 import type { User } from '@/types'
-import { useAppKitAccount } from '@reown/appkit/react'
+import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSignTypedData } from 'wagmi'
 import { PositionShareDialog } from '@/app/[locale]/(platform)/_components/PositionShareDialog'
 import SellPositionModal from '@/app/[locale]/(platform)/_components/SellPositionModal'
 import { useTradingOnboarding } from '@/app/[locale]/(platform)/_providers/TradingOnboardingProvider'
@@ -628,7 +627,6 @@ function useSellPositionFlow({
   ensureTradingReady,
   openTradeRequirements,
   runWithSignaturePrompt,
-  signTypedDataAsync,
   resolveOutcomeIndex,
 }: {
   userAddress: string
@@ -641,7 +639,6 @@ function useSellPositionFlow({
   ensureTradingReady: () => boolean
   openTradeRequirements: (options?: { forceTradingAuth?: boolean }) => void
   runWithSignaturePrompt: ReturnType<typeof useSignaturePromptRunner>['runWithSignaturePrompt']
-  signTypedDataAsync: ReturnType<typeof useSignTypedData>['signTypedDataAsync']
   resolveOutcomeIndex: (position: PublicPosition) => number
 }) {
   const [sellModalPayload, setSellModalPayload] = useState<SellModalPayload | null>(null)
@@ -923,7 +920,6 @@ function useSellPositionFlow({
     resolveOutcomeIndex,
     runWithSignaturePrompt,
     sellModalPayload,
-    signTypedDataAsync,
     user,
     userAddress,
   ])
@@ -941,8 +937,7 @@ export default function PublicPositionsList({ userAddress }: PublicPositionsList
   const queryClient = useQueryClient()
   const router = useRouter()
   const { open } = useAppKit()
-  const { isConnected } = useAppKitAccount()
-  const { signTypedDataAsync } = useSignTypedData()
+  const { isConnected } = useWalletConnection()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const { ensureTradingReady, openTradeRequirements } = useTradingOnboarding()
   const {
@@ -1060,7 +1055,6 @@ export default function PublicPositionsList({ userAddress }: PublicPositionsList
     ensureTradingReady,
     openTradeRequirements,
     runWithSignaturePrompt,
-    signTypedDataAsync,
     resolveOutcomeIndex,
   })
 
