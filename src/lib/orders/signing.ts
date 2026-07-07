@@ -1,4 +1,4 @@
-import type { TypedDataDomain } from 'viem'
+import type { TypedDataDomain } from '@/lib/eth-utils'
 import type { SignTypedDataParameters } from 'wagmi/actions'
 import type { BlockchainOrder } from '@/types'
 import { wrapTypedDataSignature } from 'viem/experimental/erc7739'

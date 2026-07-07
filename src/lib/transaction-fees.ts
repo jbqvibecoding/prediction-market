@@ -1,5 +1,5 @@
-import type { PublicClient } from 'viem'
-import { parseGwei } from 'viem'
+import type { PublicClient } from '@/lib/eth-utils'
+import { parseGwei } from '@/lib/eth-utils'
 import { AMOY_CHAIN_ID } from '@/lib/network'
 
 const MIN_AMOY_PRIORITY_FEE_WEI = parseGwei('25')

@@ -24,6 +24,24 @@ export interface TypedDataDomain {
   salt?: Hex
 }
 
+/** Minimal viem-compatible receipt shape for the fields still referenced. */
+export interface TransactionReceipt {
+  status: 'success' | 'reverted'
+  transactionHash: Hash
+  [key: string]: unknown
+}
+
+/** Minimal viem-compatible client shape for the fee-estimation fields still referenced. */
+export interface PublicClient {
+  getGasPrice: () => Promise<bigint>
+  estimateFeesPerGas: (args?: unknown) => Promise<{
+    maxFeePerGas?: bigint
+    maxPriorityFeePerGas?: bigint
+    gasPrice?: bigint
+  }>
+  [key: string]: unknown
+}
+
 export const zeroAddress: Address = '0x0000000000000000000000000000000000000000'
 
 /** True for a 20-byte 0x-prefixed hex string (case-insensitive). */
@@ -57,9 +75,14 @@ export function keccak256(value: Hex | Uint8Array): Hex {
   return bytesToHex(keccak_256(bytes))
 }
 
-/** UTF-8 string -> 0x-hex. */
-export function stringToHex(value: string): Hex {
+/** UTF-8 string -> 0x-hex. `size` right-pads (or truncates) to that many bytes. */
+export function stringToHex(value: string, opts?: { size?: number }): Hex {
   const bytes = new TextEncoder().encode(value)
+  if (opts?.size !== undefined) {
+    const padded = new Uint8Array(opts.size)
+    padded.set(bytes.subarray(0, opts.size))
+    return bytesToHex(padded)
+  }
   return bytesToHex(bytes)
 }
 

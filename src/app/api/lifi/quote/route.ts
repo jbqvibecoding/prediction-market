@@ -1,7 +1,7 @@
 import type { TokenExtended } from '@lifi/sdk'
 import { getQuote, getTokens } from '@lifi/sdk'
 import { NextResponse } from 'next/server'
-import { parseUnits } from 'viem'
+import { parseUnits } from '@/lib/eth-utils'
 import { sanitizeNumericInput } from '@/lib/amount-input'
 import { COLLATERAL_TOKEN_ADDRESS } from '@/lib/contracts'
 import { ensureLiFiServerConfig } from '@/lib/lifi'

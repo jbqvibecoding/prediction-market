@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAddress, isAddress } from 'viem'
+import { getAddress, isAddress } from '@/lib/eth-utils'
 import { z } from 'zod'
 import {
   groupAllowedMarketCreatorItems,

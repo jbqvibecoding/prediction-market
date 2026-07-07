@@ -1,6 +1,6 @@
-import type { Address, Hex } from 'viem'
+import type { Address, Hex } from '@/lib/eth-utils'
 import type { Event } from '@/types'
-import { isAddress, stringToHex } from 'viem'
+import { isAddress, stringToHex } from '@/lib/eth-utils'
 import {
   DIRECT_RESOLUTION_ORACLE_ADDRESS,
   DRO_CTF_ADAPTER_V4_ADDRESS,

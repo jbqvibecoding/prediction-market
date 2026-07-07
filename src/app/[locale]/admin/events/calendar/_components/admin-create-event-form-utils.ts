@@ -1,4 +1,4 @@
-import type { Hex } from 'viem'
+import type { Hex } from '@/lib/eth-utils'
 import type {
   AiRulesResponse,
   AiValidationIssue,
@@ -30,7 +30,7 @@ import type {
 import type { AdminSportsFormState, AdminSportsTeamHostStatus } from '@/lib/admin-sports-create'
 import type { EventCreationDraftRecord } from '@/lib/db/queries/event-creations'
 import type { EventCreationAssetRef, EventCreationRecurrenceUnit } from '@/lib/event-creation'
-import { toHex } from 'viem'
+import { toHex } from '@/lib/eth-utils'
 import { buildAdminSportsStepErrors, isSportsMainCategory } from '@/lib/admin-sports-create'
 import { normalizeDateTimeLocalValue } from '@/lib/datetime-local'
 import { slugifyEventCreationValue as slugify } from '@/lib/event-creation'

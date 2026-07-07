@@ -1,4 +1,4 @@
-import type { TransactionReceipt } from 'viem'
+import type { TransactionReceipt } from '@/lib/eth-utils'
 import type { AdminSportsCustomMarketState, AdminSportsFormState, AdminSportsPropState } from '@/lib/admin-sports-create'
 import type { EventCreationDraftRecord } from '@/lib/db/queries/event-creations'
 import { buildAdminSportsDerivedContent, createInitialAdminSportsForm, isSportsMainCategory } from '@/lib/admin-sports-create'

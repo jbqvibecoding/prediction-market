@@ -1,5 +1,5 @@
 import type { EventCreationRecurrenceUnit } from '@/lib/event-creation'
-import { parseGwei } from 'viem'
+import { parseGwei } from '@/lib/eth-utils'
 import { AMOY_CHAIN_ID, IS_TEST_MODE, POLYGON_MAINNET_CHAIN_ID } from '@/lib/network'
 
 export const TOTAL_STEPS = 5
