@@ -1,19 +1,17 @@
 'use client'
 
-import { useAppKitAccount } from '@reown/appkit/react'
+import { useConnection, useWallet } from '@solana/wallet-adapter-react'
+import { PublicKey } from '@solana/web3.js'
 import { useQuery } from '@tanstack/react-query'
 import { useExtracted } from 'next-intl'
-import { useCallback, useMemo } from 'react'
+import { useCallback } from 'react'
 import { toast } from 'sonner'
-import { createPublicClient, formatUnits, getAddress, http, isAddress } from 'viem'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useBalance } from '@/hooks/useBalance'
-import { resolveProposerWhitelistAddress } from '@/lib/proposer-whitelist'
-import { defaultViemNetwork, defaultViemRpcUrl } from '@/lib/viem-network'
-import { useUser } from '@/stores/useUser'
 
-const ADMIN_POL_BALANCE_QUERY_KEY = 'admin-eoa-pol-balance'
+const ADMIN_SOL_BALANCE_QUERY_KEY = 'admin-sol-balance'
+const LAMPORTS_PER_SOL = 1_000_000_000
 
 function formatAdminBalance(value: number | null | undefined, decimals = 2) {
   if (!Number.isFinite(value)) {
@@ -26,60 +24,50 @@ function formatAdminBalance(value: number | null | undefined, decimals = 2) {
   })
 }
 
+/**
+ * Solana: admin header balances read the connected wallet's SOL (native gas,
+ * replacing the EVM POL/native read) and USDC (via the Solana `useBalance`).
+ */
 export default function AdminHeaderBalances() {
   const t = useExtracted()
-  const user = useUser()
-  const { address: connectedAddress } = useAppKitAccount()
-  const publicClient = useMemo(
-    () => createPublicClient({
-      chain: defaultViemNetwork,
-      transport: http(defaultViemRpcUrl),
-    }),
-    [],
-  )
-  const eoaAddress = useMemo(
-    () => resolveProposerWhitelistAddress(connectedAddress, user?.address),
-    [connectedAddress, user?.address],
-  )
-  const normalizedEoaAddress = useMemo(
-    () => eoaAddress && isAddress(eoaAddress) ? getAddress(eoaAddress) : null,
-    [eoaAddress],
-  )
+  const { connection } = useConnection()
+  const { publicKey } = useWallet()
+  const address = publicKey?.toBase58() ?? null
+
   const { balance: usdcBalance, isLoadingBalance: isLoadingUsdcBalance } = useBalance({
-    enabled: Boolean(normalizedEoaAddress),
-    depositWalletAddress: normalizedEoaAddress,
+    enabled: Boolean(address),
   })
-  const { data: polBalance, isLoading: isLoadingPolBalance } = useQuery({
-    queryKey: [ADMIN_POL_BALANCE_QUERY_KEY, normalizedEoaAddress],
-    enabled: Boolean(publicClient && normalizedEoaAddress),
+
+  const { data: solBalance, isLoading: isLoadingSolBalance } = useQuery({
+    queryKey: [ADMIN_SOL_BALANCE_QUERY_KEY, address],
+    enabled: Boolean(address),
     staleTime: 10_000,
     gcTime: 5 * 60 * 1000,
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
     queryFn: async () => {
-      if (!publicClient || !normalizedEoaAddress) {
+      if (!address) {
         return 0
       }
-
-      const rawBalance = await publicClient.getBalance({ address: normalizedEoaAddress })
-      return Number(formatUnits(rawBalance, 18))
+      const lamports = await connection.getBalance(new PublicKey(address))
+      return lamports / LAMPORTS_PER_SOL
     },
   })
 
-  const handleCopyEoa = useCallback(async () => {
-    if (!normalizedEoaAddress) {
+  const handleCopy = useCallback(async () => {
+    if (!address) {
       return
     }
 
     try {
-      await navigator.clipboard.writeText(normalizedEoaAddress)
-      toast.success(t('EOA wallet copied.'))
+      await navigator.clipboard.writeText(address)
+      toast.success(t('Wallet address copied.'))
     }
     catch (error) {
-      console.error('Failed to copy admin EOA wallet address:', error)
-      toast.error(t('Could not copy EOA wallet.'))
+      console.error('Failed to copy admin wallet address:', error)
+      toast.error(t('Could not copy wallet address.'))
     }
-  }, [normalizedEoaAddress, t])
+  }, [address, t])
 
   return (
     <div className="grid grid-cols-2 gap-x-1">
@@ -88,14 +76,14 @@ export default function AdminHeaderBalances() {
         variant="ghost"
         size="header"
         className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-[6px] px-2.5 py-1"
-        onClick={() => void handleCopyEoa()}
-        disabled={!normalizedEoaAddress}
+        onClick={() => void handleCopy()}
+        disabled={!address}
       >
-        <div className="translate-y-px text-xs/tight font-medium text-muted-foreground">{t('Admin POL')}</div>
+        <div className="translate-y-px text-xs/tight font-medium text-muted-foreground">{t('Admin SOL')}</div>
         <div className="-translate-y-px text-base/tight font-semibold text-foreground">
-          {isLoadingPolBalance
+          {isLoadingSolBalance
             ? <Skeleton className="h-5 w-12" />
-            : formatAdminBalance(polBalance)}
+            : formatAdminBalance(solBalance)}
         </div>
       </Button>
 
@@ -104,8 +92,8 @@ export default function AdminHeaderBalances() {
         variant="ghost"
         size="header"
         className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-[6px] px-2.5 py-1"
-        onClick={() => void handleCopyEoa()}
-        disabled={!normalizedEoaAddress}
+        onClick={() => void handleCopy()}
+        disabled={!address}
       >
         <div className="translate-y-px text-xs/tight font-medium text-muted-foreground">{t('Admin USDC')}</div>
         <div className="-translate-y-px text-base/tight font-semibold text-foreground">

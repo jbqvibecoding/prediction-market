@@ -1,34 +1,18 @@
-import type { Address, Hash } from 'viem'
+import type { Address } from '@/lib/eth-utils'
 import { NextResponse } from 'next/server'
-import { createPublicClient, createWalletClient, getAddress, http, isAddress } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
-import { z } from 'zod'
+import { getAddress, isAddress } from '@/lib/eth-utils'
 import { DEFAULT_ERROR_MESSAGE } from '@/lib/constants'
 import { AllowedMarketCreatorRepository } from '@/lib/db/queries/allowed-market-creators'
 import { UserRepository } from '@/lib/db/queries/user'
 import { loadEventCreationSignersFromEnv } from '@/lib/event-creation-signers'
 import {
   getServerCreatorProposerWhitelistRegistryAddress,
-  normalizeProposerAddressList,
   readCreatorProposerWhitelistStatus,
   readProposerWhitelistError,
   shortenProposerWhitelistAddress,
 } from '@/lib/proposer-whitelist'
-import {
-  CREATOR_PROPOSER_WHITELIST_ABI,
-  CREATOR_PROPOSER_WHITELIST_BYTECODE,
-  CREATOR_PROPOSER_WHITELIST_REGISTRY_ABI,
-} from '@/lib/proposer-whitelist-contracts'
-import { sendWithEstimatedFeeRetry } from '@/lib/transaction-fees'
-import { defaultViemNetwork, defaultViemRpcUrl } from '@/lib/viem-network'
 
 export const maxDuration = 120
-
-const mutateProposerWhitelistSchema = z.object({
-  action: z.enum(['create', 'deploy', 'add', 'remove']),
-  creator: z.string().trim().min(1),
-  proposers: z.array(z.string().trim().min(1)).default([]),
-})
 
 async function requireAdmin() {
   const currentUser = await UserRepository.getCurrentUser({ minimal: true })
@@ -100,30 +84,6 @@ async function buildStatusResponse(creatorParam: string | null) {
   }
 }
 
-function getServerSigner(creator: Address) {
-  const signer = buildSignerMap().get(creator.toLowerCase())
-  if (!signer) {
-    throw new Error('Selected creator does not have a server signer configured in prediction-market.')
-  }
-  return privateKeyToAccount(signer.privateKey)
-}
-
-function getServerDeployer() {
-  const signer = loadEventCreationSignersFromEnv()[0]
-  if (!signer) {
-    throw new Error('No server signer is configured to deploy proposer whitelist.')
-  }
-  return privateKeyToAccount(signer.privateKey)
-}
-
-async function waitForSuccess(publicClient: ReturnType<typeof createPublicClient>, hash: Hash) {
-  const receipt = await publicClient.waitForTransactionReceipt({ hash })
-  if (receipt.status !== 'success') {
-    throw new Error(`Transaction failed: ${hash}`)
-  }
-  return receipt
-}
-
 export async function GET(request: Request) {
   try {
     if (!(await requireAdmin())) {
@@ -145,174 +105,22 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+export async function POST() {
+  // Solana: the EVM per-creator proposer-whitelist contracts (deploy/register/
+  // add/remove) have no on-chain analog — the conditional_token program binds a
+  // single resolve authority to each condition at creation. Whitelist mutation
+  // is disabled (see AdminProposersDialog).
   try {
     if (!(await requireAdmin())) {
       return NextResponse.json({ error: 'Unauthenticated.' }, { status: 401 })
     }
-
-    const payload = await request.json().catch(() => null)
-    const parsed = mutateProposerWhitelistSchema.safeParse(payload)
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request.' }, { status: 400 })
-    }
-    if (!isAddress(parsed.data.creator)) {
-      return NextResponse.json({ error: 'Invalid creator address.' }, { status: 400 })
-    }
-
-    const creator = getAddress(parsed.data.creator) as Address
-    let requestedProposers: Address[]
-    try {
-      requestedProposers = normalizeProposerAddressList(parsed.data.proposers)
-    }
-    catch (error) {
-      return NextResponse.json({ error: readProposerWhitelistError(error) }, { status: 400 })
-    }
-
-    if (requestedProposers.length === 0 && parsed.data.action !== 'create' && parsed.data.action !== 'deploy') {
-      return NextResponse.json({ error: 'At least one proposer wallet is required.' }, { status: 400 })
-    }
-
-    const registryAddress = getServerCreatorProposerWhitelistRegistryAddress()
-    const proposers = requestedProposers
-
-    const account = parsed.data.action === 'deploy'
-      ? getServerDeployer()
-      : getServerSigner(creator)
-    const publicClient = createPublicClient({
-      chain: defaultViemNetwork,
-      transport: http(defaultViemRpcUrl),
-    })
-    const walletClient = createWalletClient({
-      account,
-      chain: defaultViemNetwork,
-      transport: http(defaultViemRpcUrl),
-    })
-
-    const hasCreatorServerSigner = buildSignerMap().has(creator.toLowerCase())
-    const currentStatus = await readCreatorProposerWhitelistStatus({
-      creator,
-      registryAddress,
-      hasServerSigner: parsed.data.action === 'deploy' ? hasCreatorServerSigner : true,
-    })
-    const txHashes: Hash[] = []
-    const chainId = defaultViemNetwork.id
-
-    if (parsed.data.action === 'deploy') {
-      if (currentStatus.whitelistAddress) {
-        return NextResponse.json({
-          whitelistAddress: currentStatus.whitelistAddress,
-          txHashes,
-        })
-      }
-
-      const deployHash = await sendWithEstimatedFeeRetry({
-        chainId,
-        client: publicClient,
-        send: overrides => walletClient.deployContract({
-          abi: CREATOR_PROPOSER_WHITELIST_ABI,
-          bytecode: CREATOR_PROPOSER_WHITELIST_BYTECODE,
-          args: [creator, proposers],
-          ...(overrides ?? {}),
-        }),
-      })
-      txHashes.push(deployHash)
-      const deployReceipt = await waitForSuccess(publicClient, deployHash)
-      const whitelistAddress = deployReceipt.contractAddress
-      if (!whitelistAddress || !isAddress(whitelistAddress)) {
-        throw new Error('Whitelist deployment did not return a contract address.')
-      }
-
-      return NextResponse.json({
-        whitelistAddress: getAddress(whitelistAddress) as Address,
-        txHashes,
-      })
-    }
-
-    if (parsed.data.action === 'create') {
-      if (!currentStatus.whitelistAddress) {
-        const deployHash = await sendWithEstimatedFeeRetry({
-          chainId,
-          client: publicClient,
-          send: overrides => walletClient.deployContract({
-            abi: CREATOR_PROPOSER_WHITELIST_ABI,
-            bytecode: CREATOR_PROPOSER_WHITELIST_BYTECODE,
-            args: [creator, proposers],
-            ...(overrides ?? {}),
-          }),
-        })
-        txHashes.push(deployHash)
-        const deployReceipt = await waitForSuccess(publicClient, deployHash)
-        const whitelistAddress = deployReceipt.contractAddress
-        if (!whitelistAddress || !isAddress(whitelistAddress)) {
-          throw new Error('Whitelist deployment did not return a contract address.')
-        }
-        const normalizedWhitelistAddress = getAddress(whitelistAddress) as Address
-
-        const registerHash = await sendWithEstimatedFeeRetry({
-          chainId,
-          client: publicClient,
-          send: overrides => walletClient.writeContract({
-            address: registryAddress,
-            abi: CREATOR_PROPOSER_WHITELIST_REGISTRY_ABI,
-            functionName: 'registerWhitelist',
-            args: [normalizedWhitelistAddress],
-            ...(overrides ?? {}),
-          }),
-        })
-        txHashes.push(registerHash)
-        await waitForSuccess(publicClient, registerHash)
-      }
-      else if (proposers.length > 0) {
-        const existingWhitelistAddress = currentStatus.whitelistAddress
-        const addHash = await sendWithEstimatedFeeRetry({
-          chainId,
-          client: publicClient,
-          send: overrides => walletClient.writeContract({
-            address: existingWhitelistAddress,
-            abi: CREATOR_PROPOSER_WHITELIST_ABI,
-            functionName: 'addProposers',
-            args: [proposers],
-            ...(overrides ?? {}),
-          }),
-        })
-        txHashes.push(addHash)
-        await waitForSuccess(publicClient, addHash)
-      }
-    }
-    else {
-      if (!currentStatus.whitelistAddress) {
-        return NextResponse.json({ error: 'Creator whitelist is not registered yet.' }, { status: 409 })
-      }
-      const existingWhitelistAddress = currentStatus.whitelistAddress
-
-      const hash = await sendWithEstimatedFeeRetry({
-        chainId,
-        client: publicClient,
-        send: overrides => walletClient.writeContract({
-          address: existingWhitelistAddress,
-          abi: CREATOR_PROPOSER_WHITELIST_ABI,
-          functionName: parsed.data.action === 'add' ? 'addProposers' : 'removeProposers',
-          args: [proposers],
-          ...(overrides ?? {}),
-        }),
-      })
-      txHashes.push(hash)
-      await waitForSuccess(publicClient, hash)
-    }
-
-    const status = await readCreatorProposerWhitelistStatus({
-      creator,
-      registryAddress,
-      hasServerSigner: true,
-    })
-
-    return NextResponse.json({ status, txHashes })
+    return NextResponse.json(
+      { error: 'Proposer whitelist management is not available on Solana.' },
+      { status: 400 },
+    )
   }
   catch (error) {
     console.error('API Error:', error)
-    return NextResponse.json({
-      error: readProposerWhitelistError(error),
-    }, { status: 500 })
+    return NextResponse.json({ error: readProposerWhitelistError(error) }, { status: 500 })
   }
 }

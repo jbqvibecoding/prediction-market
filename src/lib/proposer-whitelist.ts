@@ -1,11 +1,6 @@
-import type { Address, Hash } from 'viem'
-import { createPublicClient, getAddress, http, isAddress } from 'viem'
-import { CREATOR_PROPOSER_WHITELIST_REGISTRY_ADDRESS, ZERO_ADDRESS } from '@/lib/contracts'
-import {
-  CREATOR_PROPOSER_WHITELIST_ABI,
-  CREATOR_PROPOSER_WHITELIST_REGISTRY_ABI,
-} from '@/lib/proposer-whitelist-contracts'
-import { defaultViemNetwork, defaultViemRpcUrl } from '@/lib/viem-network'
+import type { Address, Hash } from '@/lib/eth-utils'
+import { CREATOR_PROPOSER_WHITELIST_REGISTRY_ADDRESS } from '@/lib/contracts'
+import { getAddress, isAddress } from '@/lib/eth-utils'
 
 export interface ProposerWhitelistCreatorOption {
   address: Address
@@ -184,36 +179,16 @@ export async function readCreatorProposerWhitelistStatus(input: {
   registryAddress?: Address
   hasServerSigner?: boolean
 }): Promise<ProposerWhitelistStatus> {
+  // Solana: the EVM per-creator proposer-whitelist registry has no analog — the
+  // conditional_token program binds a single resolve authority to each condition
+  // at creation. Report an empty (permissive) status; whitelist management is
+  // disabled (see AdminProposersDialog).
   const registryAddress = input.registryAddress ?? getClientCreatorProposerWhitelistRegistryAddress()
-  const client = createPublicClient({
-    chain: defaultViemNetwork,
-    transport: http(defaultViemRpcUrl),
-  })
-
-  const whitelist = await client.readContract({
-    address: registryAddress,
-    abi: CREATOR_PROPOSER_WHITELIST_REGISTRY_ABI,
-    functionName: 'whitelistOf',
-    args: [input.creator],
-  }) as Address
-
-  const whitelistAddress = whitelist.toLowerCase() === ZERO_ADDRESS.toLowerCase()
-    ? null
-    : (getAddress(whitelist) as Address)
-
-  const proposers = whitelistAddress
-    ? await client.readContract({
-      address: whitelistAddress,
-      abi: CREATOR_PROPOSER_WHITELIST_ABI,
-      functionName: 'getProposers',
-    }) as Address[]
-    : []
-
   return {
     creator: input.creator,
     registryAddress,
-    whitelistAddress,
-    proposers: proposers.map(proposer => getAddress(proposer) as Address),
+    whitelistAddress: null,
+    proposers: [],
     hasServerSigner: Boolean(input.hasServerSigner),
   }
 }
