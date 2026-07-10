@@ -7,13 +7,7 @@ import type { User } from '@/types'
 import { useExtracted } from 'next-intl'
 import { usePathname } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createPublicClient, erc20Abi, erc1155Abi, http, UserRejectedRequestError } from 'viem'
-import { useSignMessage, useSignTypedData } from 'wagmi'
-import { markApprovalStateWithoutTransactionAction } from '@/app/[locale]/(platform)/_actions/approve-tokens'
 import {
-  createDepositWalletAction,
-  enableTradingAuthAction,
-  markAutoRedeemApprovalCompletedAction,
   updateOnboardingEmailAction,
   updateOnboardingUsernameAction,
 } from '@/app/[locale]/(platform)/_actions/deposit-wallet'
@@ -29,42 +23,12 @@ import { useSignaturePromptRunner } from '@/hooks/useSignaturePromptRunner'
 import { useWalletConnection } from '@/hooks/useWalletConnection'
 import { authClient } from '@/lib/auth-client'
 import {
-  clearCommunityAuth,
-  ensureCommunityToken,
-  parseCommunityError,
-} from '@/lib/community-auth'
-import {
   COMMUNITY_PROFILE_LOOKUP_TIMEOUT_MS,
   fetchCommunityProfileByAddress,
-  updateCommunityProfile,
 } from '@/lib/community-profile'
 import { DEFAULT_ERROR_MESSAGE } from '@/lib/constants'
-import {
-  COLLATERAL_TOKEN_ADDRESS,
-  CONDITIONAL_TOKENS_CONTRACT,
-  CTF_AUTO_REDEEM_ADDRESS,
-  CTF_EXCHANGE_ADDRESS,
-  NEG_RISK_CTF_EXCHANGE_ADDRESS,
-  UMA_NEG_RISK_ADAPTER_ADDRESS,
-} from '@/lib/contracts'
-import { fetchReferralLocked } from '@/lib/exchange'
-import {
-  buildTradingAuthMessage,
-  getTradingAuthDomain,
-  TRADING_AUTH_PRIMARY_TYPE,
-  TRADING_AUTH_TYPES,
-} from '@/lib/trading-auth/client'
-import { isTradingAuthRequiredError } from '@/lib/trading-auth/errors'
 import { hasUsableUserEmail } from '@/lib/user-email'
-import { defaultViemNetwork, defaultViemRpcUrl } from '@/lib/viem-network'
-import { signAndSubmitDepositWalletCalls } from '@/lib/wallet/client'
-import {
-  buildAutoRedeemAllowanceCalls,
-  buildCollateralApproveCall,
-  buildConditionalSetApprovalForAllCall,
-  buildSetReferralCalls,
-  hasSufficientCollateralAllowance,
-} from '@/lib/wallet/transactions'
+import { isUserRejectedRequestError } from '@/lib/wallet'
 import { mergeSessionUserState, useUser } from '@/stores/useUser'
 
 type OnboardingModal = 'username' | 'email' | 'enable' | 'enable-status' | 'approve' | 'auto-redeem' | null
@@ -291,20 +255,11 @@ function completeDepositWalletDeployment({
   }
 }
 
-async function hasDepositWalletCollateralBalance(depositWalletAddress: `0x${string}`) {
-  const client = createPublicClient({
-    chain: defaultViemNetwork,
-    transport: http(defaultViemRpcUrl),
-  })
-
-  const balance = await client.readContract({
-    address: COLLATERAL_TOKEN_ADDRESS,
-    abi: erc20Abi,
-    functionName: 'balanceOf',
-    args: [depositWalletAddress],
-  }) as bigint
-
-  return balance > 0n
+async function hasDepositWalletCollateralBalance(_depositWalletAddress: string) {
+  // Solana: the EVM deposit-wallet collateral read is removed. Balance is read
+  // from the connected wallet's USDC ATA elsewhere (useBalance); treat as funded
+  // here so the fund modal is not force-opened.
+  return true
 }
 
 function openFundModalAfterTradingReady({
@@ -352,8 +307,6 @@ function TradingOnboardingProviderContent({
     address: string
     username: string
   } | null>(null)
-  const { signTypedDataAsync } = useSignTypedData()
-  const { signMessageAsync } = useSignMessage()
   const { open: openWalletConnect } = useWalletConnection()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const t = useExtracted()
@@ -570,37 +523,10 @@ function TradingOnboardingProviderContent({
     setIsUsernameSubmitting(true)
     setUsernameError(null)
     try {
-      const token = await ensureCommunityToken({
-        address: user.address,
-        signMessageAsync: args => runWithSignaturePrompt(() => signMessageAsync(args)),
-        communityApiUrl,
-        depositWalletAddress: user.deposit_wallet_address ?? null,
-      })
-
-      const response = await updateCommunityProfile({
-        communityApiUrl,
-        token,
-        username,
-      })
-
-      if (response.status === 401) {
-        clearCommunityAuth()
-      }
-      if (!response.ok) {
-        setUsernameError(
-          response.status === 409
-            ? t('That username is already taken.')
-            : await parseCommunityError(response, DEFAULT_ERROR_MESSAGE),
-        )
-        return
-      }
-
-      const payload = await response.json() as CommunityProfile
-      const communityUsername = payload.username?.trim()
-      if (!communityUsername) {
-        setUsernameError(t('Community profile did not confirm the username.'))
-        return
-      }
+      // Solana: community profile sync used EVM wallet message signing and is
+      // disabled until the community backend accepts Solana signatures. The
+      // username still saves to our DB below.
+      const communityUsername = username
 
       const result = await updateOnboardingUsernameAction({
         username,
@@ -645,7 +571,7 @@ function TradingOnboardingProviderContent({
     }
     catch (error) {
       setUsernameError(
-        error instanceof UserRejectedRequestError
+        isUserRejectedRequestError(error)
           ? t('You rejected the signature request.')
           : error instanceof Error
             ? error.message
@@ -656,16 +582,12 @@ function TradingOnboardingProviderContent({
       setIsUsernameSubmitting(false)
     }
   }, [
-    communityApiUrl,
     isUsernameSubmitting,
     refreshSessionUserState,
-    runWithSignaturePrompt,
-    signMessageAsync,
     shouldContinueTradingAuthPrompt,
     status,
     t,
     user?.address,
-    user?.deposit_wallet_address,
     isEventRoute,
   ])
 
@@ -751,440 +673,58 @@ function TradingOnboardingProviderContent({
   }, [isEmailSubmitting, refreshSessionUserState, shouldContinueTradingAuthPrompt, status, isEventRoute])
 
   const enableTradingAuthForCurrentUser = useCallback(async () => {
-    if (!user?.address) {
-      throw new Error(DEFAULT_ERROR_MESSAGE)
-    }
-
-    const timestamp = Math.floor(Date.now() / 1000).toString()
-    const message = buildTradingAuthMessage({
-      address: user.address as `0x${string}`,
-      timestamp,
-    })
-    const signature = await runWithSignaturePrompt(() => signTypedDataAsync({
-      domain: getTradingAuthDomain(),
-      types: TRADING_AUTH_TYPES,
-      primaryType: TRADING_AUTH_PRIMARY_TYPE,
-      message,
-    }))
-
-    const result = await enableTradingAuthAction({
-      signature,
-      timestamp,
-      nonce: message.nonce.toString(),
-    })
-
-    if (result.error || !result.data) {
-      throw new Error(result.error ?? DEFAULT_ERROR_MESSAGE)
-    }
-    const data = result.data
-
-    useUser.setState((previous) => {
-      if (!previous) {
-        return previous
-      }
-      return {
-        ...previous,
-        settings: mergeUserSettings(previous, {
-          tradingAuth: data.tradingAuth,
-        }),
-      }
-    })
-    void refreshSessionUserState()
+    // Solana: there is no EVM trading-auth (relayer/CLOB EIP-712) step. No-op.
     setRequiresTradingAuthRefresh(false)
     setDismissedModal(null)
-  }, [
-    refreshSessionUserState,
-    runWithSignaturePrompt,
-    signTypedDataAsync,
-    user?.address,
-  ])
+  }, [])
 
   const handleCreateDepositWallet = useCallback(async () => {
-    if (!user?.address || enableTradingStep === 'enabling') {
-      return
-    }
-    setEnableTradingError(null)
-
-    try {
-      setEnableTradingStep('enabling')
-      let result = await createDepositWalletAction()
-
-      if (result.error && isTradingAuthRequiredError(result.error)) {
-        await enableTradingAuthForCurrentUser()
-        setActiveModal('enable')
-        result = await createDepositWalletAction()
-      }
-
-      if (result.error || !result.data) {
-        setEnableTradingError(result.error ?? DEFAULT_ERROR_MESSAGE)
-        setEnableTradingStep('idle')
-        return
-      }
-      const data = result.data
-
-      useUser.setState((previous) => {
-        if (!previous) {
-          return previous
-        }
-        return {
-          ...previous,
-          ...data,
-        }
-      })
-      void refreshSessionUserState()
-
-      if (data.deposit_wallet_status === 'deployed') {
-        setEnableTradingStep('completed')
-        setDismissedModal(null)
-        setActiveModal(status.hasTokenApprovals ? null : 'approve')
-      }
-      else {
-        setEnableTradingStep('deploying')
-      }
-    }
-    catch (error) {
-      if (error instanceof UserRejectedRequestError) {
-        setEnableTradingError(t('You rejected the signature request.'))
-      }
-      else if (error instanceof Error) {
-        setEnableTradingError(error.message || DEFAULT_ERROR_MESSAGE)
-      }
-      else {
-        setEnableTradingError(DEFAULT_ERROR_MESSAGE)
-      }
-      setEnableTradingStep('idle')
-    }
-  }, [
-    enableTradingAuthForCurrentUser,
-    enableTradingStep,
-    refreshSessionUserState,
-    status.hasTokenApprovals,
-    t,
-    user?.address,
-  ])
+    // Solana: no EVM deposit-wallet deployment. A connected, signed-in user is
+    // trading-ready (status is forced ready), so this is a no-op.
+    setEnableTradingStep('completed')
+    setDismissedModal(null)
+    setActiveModal(null)
+  }, [])
 
   const handleEnableTradingAuth = useCallback(async () => {
-    if (!user?.address || enableTradingStep === 'enabling') {
-      return
-    }
-    setEnableTradingError(null)
-
-    try {
-      setEnableTradingStep('enabling')
-      await enableTradingAuthForCurrentUser()
-      if (status.hasDeployedDepositWallet) {
-        setEnableTradingStep('completed')
-        setActiveModal(status.hasTokenApprovals ? null : 'approve')
-      }
-      else {
-        setEnableTradingStep('idle')
-        setActiveModal('enable')
-      }
-    }
-    catch (error) {
-      if (error instanceof UserRejectedRequestError) {
-        setEnableTradingError(t('You rejected the signature request.'))
-      }
-      else if (error instanceof Error) {
-        setEnableTradingError(error.message || DEFAULT_ERROR_MESSAGE)
-      }
-      else {
-        setEnableTradingError(DEFAULT_ERROR_MESSAGE)
-      }
-      setEnableTradingStep('idle')
-    }
-  }, [
-    enableTradingAuthForCurrentUser,
-    enableTradingStep,
-    status.hasDeployedDepositWallet,
-    status.hasTokenApprovals,
-    t,
-    user?.address,
-  ])
-
-  const resolveReferralExchanges = useCallback(async (depositWallet: `0x${string}`) => {
-    const exchanges = [
-      CTF_EXCHANGE_ADDRESS as `0x${string}`,
-      NEG_RISK_CTF_EXCHANGE_ADDRESS as `0x${string}`,
-    ]
-    const results = await Promise.all(
-      exchanges.map(exchange => fetchReferralLocked(exchange, depositWallet)),
-    )
-    if (results.includes(null)) {
-      console.warn('Failed to read referral status; skipping locked/unknown exchanges.')
-    }
-    return exchanges.filter((_, index) => results[index] === false)
+    // Solana: no EVM trading-auth step. No-op (status is trading-ready).
+    setEnableTradingStep('completed')
+    setActiveModal(null)
   }, [])
 
-  const resolveMissingApprovalCalls = useCallback(async (depositWalletAddress: `0x${string}`) => {
-    const client = createPublicClient({
-      chain: defaultViemNetwork,
-      transport: http(defaultViemRpcUrl),
-    })
-
-    const collateralSpenders = [
-      CONDITIONAL_TOKENS_CONTRACT,
-      CTF_EXCHANGE_ADDRESS,
-      NEG_RISK_CTF_EXCHANGE_ADDRESS,
-      UMA_NEG_RISK_ADAPTER_ADDRESS,
-    ] as const
-    const conditionalOperators = [
-      CTF_EXCHANGE_ADDRESS,
-      NEG_RISK_CTF_EXCHANGE_ADDRESS,
-      UMA_NEG_RISK_ADAPTER_ADDRESS,
-    ] as const
-
-    const [allowances, operatorApprovals] = await Promise.all([
-      Promise.all(collateralSpenders.map(spender =>
-        client.readContract({
-          address: COLLATERAL_TOKEN_ADDRESS,
-          abi: erc20Abi,
-          functionName: 'allowance',
-          args: [depositWalletAddress, spender],
-        }) as Promise<bigint>,
-      )),
-      Promise.all(conditionalOperators.map(operator =>
-        client.readContract({
-          address: CONDITIONAL_TOKENS_CONTRACT,
-          abi: erc1155Abi,
-          functionName: 'isApprovedForAll',
-          args: [depositWalletAddress, operator],
-        }) as Promise<boolean>,
-      )),
-    ])
-
-    const approvalCalls = collateralSpenders.flatMap((spender, index) =>
-      hasSufficientCollateralAllowance(allowances[index]) ? [] : [buildCollateralApproveCall(spender)],
-    )
-    const operatorCalls = conditionalOperators.flatMap((operator, index) =>
-      operatorApprovals[index] ? [] : [buildConditionalSetApprovalForAllCall(operator)],
-    )
-
-    return [...approvalCalls, ...operatorCalls]
+  const resolveReferralExchanges = useCallback(async (_depositWallet: string): Promise<string[]> => {
+    // Solana: EVM referral/exchange reads removed.
+    return []
   }, [])
 
-  const ensureAutoRedeemStatusFromChain = useCallback(async (depositWalletAddress: `0x${string}`) => {
-    const client = createPublicClient({
-      chain: defaultViemNetwork,
-      transport: http(defaultViemRpcUrl),
-    })
-    const approved = await client.readContract({
-      address: CONDITIONAL_TOKENS_CONTRACT,
-      abi: erc1155Abi,
-      functionName: 'isApprovedForAll',
-      args: [depositWalletAddress, CTF_AUTO_REDEEM_ADDRESS],
-    }) as boolean
+  const resolveMissingApprovalCalls = useCallback(async (_depositWalletAddress: string): Promise<unknown[]> => {
+    // Solana: no EVM ERC20/1155 approvals; nothing to approve.
+    return []
+  }, [])
 
-    if (!approved) {
-      return false
-    }
-
-    const result = await markAutoRedeemApprovalCompletedAction()
-    const autoRedeem = result.data?.autoRedeem
-    if (result.error || !autoRedeem) {
-      return true
-    }
-
-    useUser.setState((previous) => {
-      if (!previous) {
-        return previous
-      }
-      return {
-        ...previous,
-        settings: mergeUserSettings(previous, {
-          tradingAuth: {
-            autoRedeem,
-          },
-        }),
-      }
-    })
-    void refreshSessionUserState()
+  const ensureAutoRedeemStatusFromChain = useCallback(async (_depositWalletAddress: string) => {
+    // Solana: no EVM auto-redeem operator approval; treat as approved.
     return true
-  }, [refreshSessionUserState])
+  }, [])
 
   const handleApproveTokens = useCallback(async () => {
-    if (!user?.deposit_wallet_address || approvalsStep === 'signing') {
-      return
-    }
-
-    setApprovalsStep('signing')
-    setTokenApprovalError(null)
-
-    try {
-      const referralExchanges = await resolveReferralExchanges(user.deposit_wallet_address as `0x${string}`)
-      const missingApprovalCalls = await resolveMissingApprovalCalls(user.deposit_wallet_address as `0x${string}`)
-      const calls = [
-        ...missingApprovalCalls,
-        ...buildSetReferralCalls({
-          referrer: affiliateMetadata.referrerAddress,
-          affiliate: affiliateMetadata.affiliateAddress,
-          affiliateSharePercent: affiliateMetadata.affiliateSharePercent,
-          exchanges: referralExchanges,
-        }),
-      ]
-      const result = calls.length > 0
-        ? await signAndSubmitDepositWalletCalls({
-            user,
-            calls,
-            metadata: 'approve_tokens',
-            signTypedDataAsync,
-          })
-        : await markApprovalStateWithoutTransactionAction('approve_tokens')
-
-      if (result.error) {
-        if (isTradingAuthRequiredError(result.error)) {
-          setRequiresTradingAuthRefresh(true)
-          setApprovalsStep('idle')
-          setTokenApprovalError(null)
-          openNextRequirement({ forceTradingAuth: true })
-          return
-        }
-        if (result.code === 'deadline_expired') {
-          setTokenApprovalError(t('Your signature expired. Click Sign again to create a fresh request.'))
-        }
-        else {
-          setTokenApprovalError(result.error)
-        }
-        setApprovalsStep('idle')
-        return
-      }
-
-      if (result.approvals) {
-        useUser.setState((previous) => {
-          if (!previous) {
-            return previous
-          }
-          return {
-            ...previous,
-            settings: mergeUserSettings(previous, {
-              tradingAuth: {
-                approvals: result.approvals,
-              },
-            }),
-          }
-        })
-        void refreshSessionUserState()
-      }
-
-      setApprovalsStep('completed')
-      setDismissedModal(null)
-      setAutoRedeemStep('idle')
-      setAutoRedeemError(null)
-      const hasAutoRedeemOnChain = await ensureAutoRedeemStatusFromChain(user.deposit_wallet_address as `0x${string}`)
-      if (hasAutoRedeemOnChain) {
-        setActiveModal(null)
-        setShouldShowFundAfterTradingReady(false)
-        await openFundModalIfBalanceEmpty()
-      }
-      else {
-        setActiveModal('auto-redeem')
-        setShouldShowFundAfterTradingReady(false)
-      }
-    }
-    catch (error) {
-      if (error instanceof UserRejectedRequestError) {
-        setTokenApprovalError(t('You rejected the signature request.'))
-      }
-      else if (error instanceof Error) {
-        setTokenApprovalError(error.message || DEFAULT_ERROR_MESSAGE)
-      }
-      else {
-        setTokenApprovalError(DEFAULT_ERROR_MESSAGE)
-      }
-      setApprovalsStep('idle')
-    }
-  }, [
-    affiliateMetadata,
-    approvalsStep,
-    openFundModalIfBalanceEmpty,
-    openNextRequirement,
-    refreshSessionUserState,
-    resolveMissingApprovalCalls,
-    resolveReferralExchanges,
-    signTypedDataAsync,
-    ensureAutoRedeemStatusFromChain,
-    t,
-    user,
-  ])
+    // Solana: no EVM ERC20/1155 token approvals. Treat approvals as complete and
+    // continue the (Solana-ready) flow.
+    setApprovalsStep('completed')
+    setDismissedModal(null)
+    setActiveModal(null)
+    setShouldShowFundAfterTradingReady(false)
+    await openFundModalIfBalanceEmpty()
+  }, [openFundModalIfBalanceEmpty])
 
   const handleApproveAutoRedeem = useCallback(async () => {
-    if (!user?.deposit_wallet_address || autoRedeemStep === 'signing') {
-      return
-    }
-
-    setAutoRedeemStep('signing')
-    setAutoRedeemError(null)
-
-    try {
-      const result = await signAndSubmitDepositWalletCalls({
-        user,
-        calls: buildAutoRedeemAllowanceCalls(),
-        metadata: 'auto_redeem_approval',
-        signTypedDataAsync,
-      })
-
-      if (result.error) {
-        if (isTradingAuthRequiredError(result.error)) {
-          setRequiresTradingAuthRefresh(true)
-          setAutoRedeemStep('idle')
-          setAutoRedeemError(null)
-          openNextRequirement({ forceTradingAuth: true })
-          return
-        }
-        if (result.code === 'deadline_expired') {
-          setAutoRedeemError(t('Your signature expired. Click Sign again to create a fresh request.'))
-        }
-        else {
-          setAutoRedeemError(result.error)
-        }
-        setAutoRedeemStep('idle')
-        return
-      }
-
-      if (result.autoRedeem) {
-        useUser.setState((previous) => {
-          if (!previous) {
-            return previous
-          }
-          return {
-            ...previous,
-            settings: mergeUserSettings(previous, {
-              tradingAuth: {
-                autoRedeem: result.autoRedeem,
-              },
-            }),
-          }
-        })
-        void refreshSessionUserState()
-      }
-
-      setAutoRedeemStep('completed')
-      setDismissedModal(null)
-      setActiveModal(null)
-      setShouldShowFundAfterTradingReady(false)
-      await openFundModalIfBalanceEmpty()
-    }
-    catch (error) {
-      if (error instanceof UserRejectedRequestError) {
-        setAutoRedeemError(t('You rejected the signature request.'))
-      }
-      else if (error instanceof Error) {
-        setAutoRedeemError(error.message || DEFAULT_ERROR_MESSAGE)
-      }
-      else {
-        setAutoRedeemError(DEFAULT_ERROR_MESSAGE)
-      }
-      setAutoRedeemStep('idle')
-    }
-  }, [
-    autoRedeemStep,
-    openFundModalIfBalanceEmpty,
-    openNextRequirement,
-    refreshSessionUserState,
-    signTypedDataAsync,
-    t,
-    user,
-  ])
+    // Solana: no EVM auto-redeem approval. Treat as complete.
+    setAutoRedeemStep('completed')
+    setDismissedModal(null)
+    setActiveModal(null)
+    setShouldShowFundAfterTradingReady(false)
+    await openFundModalIfBalanceEmpty()
+  }, [openFundModalIfBalanceEmpty])
 
   const ensureTradingReady = useCallback(() => {
     if (!user) {
