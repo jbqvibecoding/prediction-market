@@ -41,7 +41,6 @@ import type {
 } from '@/lib/admin-sports-create'
 import type { EventCreationDraftRecord } from '@/lib/db/queries/event-creations'
 import type { EventCreationAssetPayload, EventCreationRecurrenceUnit } from '@/lib/event-creation'
-import { useAppKitAccount, useAppKitNetworkCore, useAppKitProvider } from '@reown/appkit/react'
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -66,8 +65,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { PublicKey, Transaction } from '@solana/web3.js'
 import { toast } from 'sonner'
-import { createPublicClient, createWalletClient, custom, formatUnits, getAddress, http, isAddress, keccak256, stringToHex } from 'viem'
-import { usePublicClient, useWalletClient } from 'wagmi'
+import bs58 from 'bs58'
+import { getAddress, isAddress, keccak256, stringToHex } from '@/lib/eth-utils'
 import { getSolanaConfig } from '@/lib/solana/config'
 import { buildInitializeConditionInstruction } from '@/lib/solana/conditional-token'
 import AppLink from '@/components/AppLink'
@@ -127,9 +126,7 @@ import {
   isProposerWhitelistStatusResponse,
   resolveProposerWhitelistAddress,
 } from '@/lib/proposer-whitelist'
-import { sendWithEstimatedFeeRetry } from '@/lib/transaction-fees'
 import { cn } from '@/lib/utils'
-import { defaultViemNetwork, defaultViemRpcUrl, resolveViemNetworkByChainId } from '@/lib/viem-network'
 import { useUser } from '@/stores/useUser'
 import {
   APPROVE_GAS_UNITS_ESTIMATE,
@@ -362,16 +359,12 @@ function useAdminCreateEventForm({
   serverAssetPayload: EventCreationAssetPayload | null
 }) {
   const router = useRouter()
-  const appKitAccount = useAppKitAccount({ namespace: 'eip155' })
-  const { address: connectedAddress } = appKitAccount
-  const { walletProvider, walletProviderType } = useAppKitProvider<RpcWalletProvider>('eip155')
-  const { chainId: appKitChainId } = useAppKitNetworkCore()
-  const { data: walletClient } = useWalletClient()
-  const publicClient = usePublicClient()
-  // Solana context for on-chain market initialization (initialize_condition).
-  // The admin route is wrapped in SolanaWalletProvider (see admin/layout.tsx).
+  // Solana context for on-chain market initialization (initialize_condition) and
+  // the create-market auth signature. The admin route is wrapped in
+  // SolanaWalletProvider (see admin/layout.tsx).
   const solanaWallet = useWallet()
   const { connection: solanaConnection } = useConnection()
+  const connectedAddress = solanaWallet.publicKey?.toBase58()
   const { runWithSignaturePrompt } = useSignaturePromptRunner()
   const t = useExtracted()
   const user = useUser()
@@ -387,22 +380,21 @@ function useAdminCreateEventForm({
   const initialRecurrenceInterval = initialDraftRecord?.recurrenceInterval
     ? String(initialDraftRecord.recurrenceInterval)
     : '1'
+  // Solana: the "creator" address is the connected Solana wallet's base58 pubkey.
+  // Cast to the legacy Address type so downstream call sites keep compiling; the
+  // market backend must accept a Solana creator address (same dependency as the
+  // create-market on-chain flow).
   const eoaAddress = useMemo(
-    () => resolveProposerWhitelistAddress(connectedAddress, user?.address),
+    () => (connectedAddress ?? user?.address ?? null) as `0x${string}` | null,
     [connectedAddress, user?.address],
   )
   const eoaShortAddress = useMemo(
     () => (eoaAddress ? shortenAddress(eoaAddress) : ''),
     [eoaAddress],
   )
-  const isEmbeddedWallet = Boolean(appKitAccount.embeddedWalletInfo)
-    || walletProviderType === 'AUTH'
-    || isEmbeddedWalletProvider(walletProvider)
-  const connectedWalletTransportChainId = resolveChainId(appKitChainId)
-  const walletClientMatchesConnectedAddress = Boolean(
-    walletClient?.account?.address
-    && isSameAddress(walletClient.account.address, eoaAddress),
-  )
+  // Solana wallets have no embedded (email/social) wallet concept.
+  const isEmbeddedWallet = false
+  const walletClientMatchesConnectedAddress = Boolean(connectedAddress)
 
   const [currentStep, setCurrentStep] = useState(1)
   const [maxVisitedStep, setMaxVisitedStep] = useState(1)
@@ -3094,24 +3086,11 @@ function useAdminCreateEventForm({
         return false
       }
 
-      const client = createPublicClient({
-        chain: defaultViemNetwork,
-        transport: http(defaultViemRpcUrl),
-      })
-
-      const balanceRaw = await client.readContract({
-        address: usdcToken,
-        abi: EOA_BALANCE_ABI,
-        functionName: 'balanceOf',
-        args: [eoaAddress],
-      }) as bigint
-
-      const balance = Number(formatUnits(balanceRaw, USDC_DECIMALS))
-      const normalizedBalance = Number.isFinite(balance) ? balance : 0
-      setEoaUsdcBalance(normalizedBalance)
-      const totalRequired = normalizedRequired * marketCount
-      setFundingCheckState(normalizedBalance >= totalRequired ? 'ok' : 'insufficient')
-      return normalizedBalance >= totalRequired
+      // Solana: the EVM USDC balance pre-check is not applicable. Funding is
+      // verified against the connected Solana wallet's USDC at trade time.
+      setEoaUsdcBalance(0)
+      setFundingCheckState('ok')
+      return true
     }
     catch (error) {
       console.error('Error validating EOA USDC balance:', error)
@@ -3134,37 +3113,12 @@ function useAdminCreateEventForm({
         return false
       }
 
-      const client = publicClient ?? createPublicClient({
-        chain: defaultViemNetwork,
-        transport: http(defaultViemRpcUrl),
-      })
-
-      const [balanceRaw, feeEstimate] = await Promise.all([
-        client.getBalance({ address: eoaAddress }),
-        client.estimateFeesPerGas().catch(() => null),
-      ])
-
-      const maxFeePerGas = (() => {
-        if (feeEstimate?.maxFeePerGas && feeEstimate.maxFeePerGas > 0n) {
-          return feeEstimate.maxFeePerGas
-        }
-        if (feeEstimate?.gasPrice && feeEstimate.gasPrice > 0n) {
-          return feeEstimate.gasPrice * 2n
-        }
-        return FALLBACK_MAX_FEE_PER_GAS_WEI
-      })()
-
-      const estimatedGasUnits = APPROVE_GAS_UNITS_ESTIMATE + (INITIALIZE_GAS_UNITS_ESTIMATE * BigInt(marketCount))
-      const estimatedCostWei = (estimatedGasUnits * maxFeePerGas * GAS_ESTIMATE_BUFFER_NUMERATOR) / GAS_ESTIMATE_BUFFER_DENOMINATOR
-
-      const balancePol = Number(formatUnits(balanceRaw, 18))
-      const requiredPol = Number(formatUnits(estimatedCostWei, 18))
-      setEoaPolBalance(Number.isFinite(balancePol) ? balancePol : 0)
-      setRequiredGasPol(Number.isFinite(requiredPol) ? requiredPol : 0)
-
-      const hasEnoughGas = balanceRaw >= estimatedCostWei
-      setNativeGasCheckState(hasEnoughGas ? 'ok' : 'insufficient')
-      return hasEnoughGas
+      // Solana: EVM native-gas (POL) pre-check is not applicable. Solana fees
+      // are paid in SOL by the connected wallet at send time.
+      setEoaPolBalance(0)
+      setRequiredGasPol(0)
+      setNativeGasCheckState('ok')
+      return true
     }
     catch (error) {
       console.error('Error validating EOA POL balance for gas:', error)
@@ -3174,7 +3128,7 @@ function useAdminCreateEventForm({
       setNativeGasCheckError('Could not validate POL gas balance right now.')
       return false
     }
-  }, [eoaAddress, marketCount, publicClient])
+  }, [eoaAddress, marketCount])
 
   const runAllPreSignChecks = useCallback(async (options?: { force?: boolean }) => {
     const shouldForce = Boolean(options?.force)
@@ -3494,36 +3448,6 @@ function useAdminCreateEventForm({
     }
   }, [eoaAddress])
 
-  const getConnectedWalletConnection = useCallback(() => {
-    if (!eoaAddress) {
-      throw new Error('Connect wallet first.')
-    }
-
-    const rpcProvider = isRpcWalletProvider(walletProvider)
-      ? walletProvider
-      : walletClientMatchesConnectedAddress && isRpcWalletProvider(walletClient)
-        ? walletClient
-        : null
-    const walletClientMatchesAddress = walletClientMatchesConnectedAddress
-
-    if (!walletClientMatchesAddress && !rpcProvider) {
-      throw new Error('Wallet connection is not ready. Please try again.')
-    }
-
-    return {
-      rpcProvider,
-      walletClient,
-      walletClientMatchesAddress,
-      chainId: connectedWalletTransportChainId ?? null,
-    }
-  }, [
-    connectedWalletTransportChainId,
-    eoaAddress,
-    walletClient,
-    walletClientMatchesConnectedAddress,
-    walletProvider,
-  ])
-
   const generateRulesWithAi = useCallback(async () => {
     setIsGeneratingRules(true)
     try {
@@ -3575,21 +3499,11 @@ function useAdminCreateEventForm({
     let currentPayloadChainId: number | null = null
 
     try {
-      const connection = getConnectedWalletConnection()
-      const payload = buildPreparePayload()
-      const payloadNetwork = resolveViemNetworkByChainId(payload.chainId)
-      const activeWalletClient = connection.walletClientMatchesAddress && connection.walletClient
-        ? connection.walletClient
-        : connection.rpcProvider
-          ? createWalletClient({
-              account: eoaAddress,
-              transport: custom(connection.rpcProvider),
-              ...(payloadNetwork ? { chain: payloadNetwork } : {}),
-            })
-          : null
-      if (!activeWalletClient) {
-        throw new Error('Wallet connection is not ready. Please try again.')
+      const solanaSign = solanaWallet.signMessage
+      if (!solanaSign) {
+        throw new Error('Connect a Solana wallet to sign the market creation request.')
       }
+      const payload = buildPreparePayload()
       const payloadJson = JSON.stringify(payload)
       const payloadHash = keccak256(stringToHex(payloadJson))
       currentPayloadHash = payloadHash
@@ -3622,43 +3536,28 @@ function useAdminCreateEventForm({
       if (!isAddress(authPayload.domain.verifyingContract)) {
         throw new Error('Invalid verifying contract in auth challenge response.')
       }
-      if (connection.chainId && connection.chainId !== authPayload.chainId) {
-        throw new Error(`Switch wallet to ${getChainLabel(authPayload.chainId)} before signing auth.`)
-      }
       setAuthChallengeExpiresAtMs(authPayload.expiresAt)
       setSignatureNowMs(Date.now())
 
-      const authSignature = await runWithSignaturePrompt(() => activeWalletClient.signTypedData({
-        account: eoaAddress,
-        domain: {
-          name: authPayload.domain.name,
-          version: authPayload.domain.version,
-          chainId: authPayload.chainId,
-          verifyingContract: getAddress(authPayload.domain.verifyingContract),
-        },
-        types: {
-          CreateMarketAuth: [
-            { name: 'requestId', type: 'string' },
-            { name: 'creator', type: 'address' },
-            { name: 'payloadHash', type: 'bytes32' },
-            { name: 'nonce', type: 'bytes32' },
-            { name: 'expiresAt', type: 'uint256' },
-            { name: 'chainId', type: 'uint256' },
-          ],
-        },
-        primaryType: 'CreateMarketAuth',
-        message: {
-          requestId: authPayload.requestId,
-          creator: eoaAddress,
-          payloadHash,
-          nonce: authPayload.nonce as `0x${string}`,
-          expiresAt: BigInt(authPayload.expiresAt),
-          chainId: BigInt(authPayload.chainId),
-        },
-      }), {
-        title: 'Sign auth challenge',
-        description: 'Open your wallet and approve the signature to continue.',
+      // Solana: sign the create-market auth challenge with the Solana wallet
+      // (ed25519) instead of an EVM EIP-712 signature. The market backend must
+      // verify this base58 signature over the canonical challenge JSON.
+      const authChallengeMessage = JSON.stringify({
+        requestId: authPayload.requestId,
+        creator: eoaAddress,
+        payloadHash,
+        nonce: authPayload.nonce,
+        expiresAt: authPayload.expiresAt,
+        chainId: authPayload.chainId,
       })
+      const authSignatureBytes = await runWithSignaturePrompt(
+        () => solanaSign(new TextEncoder().encode(authChallengeMessage)),
+        {
+          title: 'Sign auth challenge',
+          description: 'Open your wallet and approve the signature to continue.',
+        },
+      )
+      const authSignature = bs58.encode(authSignatureBytes)
 
       setIsSigningAuth(false)
 
@@ -3766,7 +3665,6 @@ function useAdminCreateEventForm({
     eoaAddress,
     eventImageFile,
     form.options,
-    getConnectedWalletConnection,
     isSportsEvent,
     storedAssets.eventImage,
     storedAssets.optionImages,
@@ -3873,28 +3771,8 @@ function useAdminCreateEventForm({
     if (!eoaAddress) {
       throw new Error('Connect wallet first.')
     }
-    if (!publicClient) {
-      throw new Error('Public client not available.')
-    }
-    const chainPublicClient = publicClient
-    const connection = getConnectedWalletConnection()
-    const senderAddress = eoaAddress
-    const preparedNetwork = resolveViemNetworkByChainId(activePreparedSignaturePlan.chainId)
-    const activeWalletClient = connection.walletClientMatchesAddress && connection.walletClient
-      ? connection.walletClient
-      : connection.rpcProvider
-        ? createWalletClient({
-            account: senderAddress,
-            transport: custom(connection.rpcProvider),
-            ...(preparedNetwork ? { chain: preparedNetwork } : {}),
-          })
-        : null
-    if (!activeWalletClient) {
-      throw new Error('Wallet connection is not ready. Please try again.')
-    }
-
-    if (connection.chainId && connection.chainId !== activePreparedSignaturePlan.chainId) {
-      throw new Error(`Switch wallet to ${getChainLabel(activePreparedSignaturePlan.chainId)} before signing.`)
+    if (!solanaWallet.publicKey || !solanaWallet.sendTransaction) {
+      throw new Error('Connect a Solana wallet to create the market on-chain.')
     }
 
     if (input) {
@@ -3993,268 +3871,10 @@ function useAdminCreateEventForm({
           continue
         }
 
-        if (!isAddress(tx.to)) {
-          throw new Error(`Invalid tx target for ${tx.id}.`)
-        }
-        const toAddress = tx.to as `0x${string}`
-        if (!tx.data.startsWith('0x')) {
-          throw new Error(`Invalid tx data for ${tx.id}.`)
-        }
-        const signaturePromptCopy = (() => {
-          if (tx.id === 'approve-uma-reward' || tx.id === 'approve-direct-resolution-fee') {
-            return {
-              title: t('Approve USDC spending'),
-              description: t('Open your wallet to allow the market creation fees.'),
-            }
-          }
-          if (tx.id.startsWith('pay-direct-')) {
-            return {
-              title: t('Pay direct resolution fee'),
-              description: t('Open your wallet to pay the direct resolution fee.'),
-            }
-          }
-          if (tx.id.startsWith('initialize-market-')) {
-            return {
-              title: t('Initialize market'),
-              description: t('Open your wallet to create the market onchain.'),
-            }
-          }
-
-          return {
-            title: t('Confirm transaction'),
-            description: t('Open your wallet and approve the transaction to continue.'),
-          }
-        })()
-
-        if (existingTx?.hash) {
-          setSignatureTxs(previous => previous.map((item, itemIndex) => {
-            if (itemIndex !== index) {
-              return item
-            }
-            return {
-              ...item,
-              status: 'confirming',
-              error: undefined,
-            }
-          }))
-
-          const existingReceipt = await chainPublicClient.waitForTransactionReceipt({
-            hash: existingTx.hash as `0x${string}`,
-          })
-          if (existingReceipt.status !== 'success') {
-            throw new Error(`Transaction ${tx.id} failed on-chain.`)
-          }
-
-          setSignatureTxs(previous => previous.map((item, itemIndex) => {
-            if (itemIndex !== index) {
-              return item
-            }
-            return {
-              ...item,
-              status: 'success',
-            }
-          }))
-          completedById.set(tx.id, existingTx.hash)
-          const completedTxs = Array.from(completedById.entries()).map(([id, hash]) => ({ id, hash }))
-          try {
-            await persistConfirmedTxs(activePreparedSignaturePlan.requestId, completedTxs)
-          }
-          catch (persistError) {
-            console.error('Could not persist previously confirmed tx hashes:', persistError)
-          }
-          continue
-        }
-
-        setSignatureTxs(previous => previous.map((item, itemIndex) => {
-          if (itemIndex !== index) {
-            return item
-          }
-          return {
-            ...item,
-            status: 'awaiting_wallet',
-            error: undefined,
-          }
-        }))
-
-        function send(overrides?: {
-          maxFeePerGas?: bigint
-          maxPriorityFeePerGas?: bigint
-        }) {
-          if (!connection.walletClient || !connection.walletClientMatchesAddress) {
-            throw new Error('Wallet connection is not ready. Please try again.')
-          }
-
-          return connection.walletClient.sendTransaction({
-            account: senderAddress,
-            chain: connection.walletClient.chain,
-            to: toAddress,
-            data: tx.data as `0x${string}`,
-            value: BigInt(tx.value || '0'),
-            ...(overrides ?? {}),
-          })
-        }
-
-        async function estimateEmbeddedGas() {
-          try {
-            const estimatedGas = await chainPublicClient.estimateGas({
-              account: senderAddress,
-              to: toAddress,
-              data: tx.data as `0x${string}`,
-              value: BigInt(tx.value || '0'),
-            })
-
-            return (estimatedGas * 12n) / 10n
-          }
-          catch {
-            return undefined
-          }
-        }
-
-        async function sendRpc(overrides?: {
-          maxFeePerGas?: bigint
-          maxPriorityFeePerGas?: bigint
-        }) {
-          if (!connection.rpcProvider) {
-            throw new Error('Wallet connection is not ready. Please try again.')
-          }
-          const rpcProvider = connection.rpcProvider
-
-          const rpcWalletClient = createWalletClient({
-            account: senderAddress,
-            transport: custom(rpcProvider),
-            ...(preparedNetwork ? { chain: preparedNetwork } : {}),
-          })
-
-          if (isEmbeddedWallet) {
-            const gas = await estimateEmbeddedGas()
-            const txRequest = buildRpcTransactionRequest({
-              from: senderAddress,
-              to: toAddress,
-              data: tx.data as `0x${string}`,
-              value: BigInt(tx.value || '0'),
-              gas,
-              ...(overrides ?? {}),
-            })
-            const rpcHash = await runWithSignaturePrompt(
-              () => rpcProvider.request({
-                method: 'eth_sendTransaction',
-                params: [txRequest],
-              }),
-              signaturePromptCopy,
-            )
-            if (typeof rpcHash !== 'string' || !rpcHash.startsWith('0x')) {
-              throw new Error('Wallet provider returned an invalid transaction hash.')
-            }
-            return rpcHash
-          }
-
-          const rpcHash = await runWithSignaturePrompt(
-            () => rpcWalletClient.sendTransaction({
-              account: senderAddress,
-              chain: preparedNetwork ?? undefined,
-              to: toAddress,
-              data: tx.data as `0x${string}`,
-              value: BigInt(tx.value || '0'),
-              ...(overrides ?? {}),
-            }),
-            signaturePromptCopy,
-          )
-          if (typeof rpcHash !== 'string' || !rpcHash.startsWith('0x')) {
-            throw new Error('Wallet provider returned an invalid transaction hash.')
-          }
-          return rpcHash
-        }
-
-        async function sendWithRpcFallback(overrides?: {
-          maxFeePerGas?: bigint
-          maxPriorityFeePerGas?: bigint
-        }) {
-          if (isEmbeddedWallet) {
-            return await sendRpc(overrides)
-          }
-
-          if (!connection.walletClientMatchesAddress) {
-            return await sendRpc(overrides)
-          }
-
-          try {
-            return await runWithSignaturePrompt(() => send(overrides), signaturePromptCopy)
-          }
-          catch (sendError) {
-            const message = sendError instanceof Error ? sendError.message : String(sendError)
-            if (!isBigIntSerializationError(message)) {
-              throw sendError
-            }
-
-            return await sendRpc(overrides)
-          }
-        }
-
-        let hash: string
-        try {
-          hash = isEmbeddedWallet
-            ? await sendWithRpcFallback()
-            : await sendWithEstimatedFeeRetry({
-                chainId: activePreparedSignaturePlan.chainId,
-                client: chainPublicClient,
-                send: sendWithRpcFallback,
-              })
-        }
-        catch (sendError) {
-          const message = sendError instanceof Error ? sendError.message : String(sendError)
-          if (tx.id.startsWith('initialize-market-') && isAlreadyInitializedError(message)) {
-            setSignatureTxs(previous => previous.map((item, itemIndex) => {
-              if (itemIndex !== index) {
-                return item
-              }
-              return {
-                ...item,
-                status: 'success',
-                error: undefined,
-              }
-            }))
-            continue
-          }
-
-          throw sendError
-        }
-
-        setSignatureTxs(previous => previous.map((item, itemIndex) => {
-          if (itemIndex !== index) {
-            return item
-          }
-          return {
-            ...item,
-            status: 'confirming',
-            hash,
-          }
-        }))
-
-        const receipt = await chainPublicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` })
-        if (receipt.status !== 'success') {
-          throw new Error(`Transaction ${tx.id} failed on-chain.`)
-        }
-
-        setSignatureTxs(previous => previous.map((item, itemIndex) => {
-          if (itemIndex !== index) {
-            return item
-          }
-          return {
-            ...item,
-            status: 'success',
-          }
-        }))
-        completedById.set(tx.id, hash)
-        const completedTxs = Array.from(completedById.entries()).map(([id, confirmedHash]) => ({
-          id,
-          hash: confirmedHash,
-        }))
-        try {
-          await persistConfirmedTxs(activePreparedSignaturePlan.requestId, completedTxs)
-        }
-        catch (persistError) {
-          console.error('Could not persist confirmed tx hashes:', persistError)
-        }
+        // Solana: only initialize_condition (handled above) runs client-side.
+        // Any other tx-plan items are EVM fee/approval txs that do not apply on
+        // Solana; the market backend owns any remaining on-chain steps.
+        throw new Error(`Unsupported transaction "${tx.id}" for Solana market creation.`)
       }
 
       const completedTxs = Array.from(completedById.entries()).map(([id, hash]) => ({ id, hash }))
@@ -4298,11 +3918,9 @@ function useAdminCreateEventForm({
   }, [
     eoaAddress,
     finalizeSignatureFlow,
-    getConnectedWalletConnection,
     isEmbeddedWallet,
     persistConfirmedTxs,
     preparedSignaturePlan,
-    publicClient,
     runWithSignaturePrompt,
     signatureTxs,
     t,
