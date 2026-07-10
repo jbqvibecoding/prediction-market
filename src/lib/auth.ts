@@ -1,19 +1,16 @@
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { createHMAC } from '@better-auth/utils/hmac'
-import { getChainIdFromMessage } from '@reown/appkit-siwe'
 import { betterAuth } from 'better-auth'
 import { createAuthMiddleware } from 'better-auth/api'
 import { deleteSessionCookie } from 'better-auth/cookies'
 import { generateRandomString } from 'better-auth/crypto'
 import { nextCookies } from 'better-auth/next-js'
 import { customSession, siwe, twoFactor } from 'better-auth/plugins'
-import { createPublicClient, http } from 'viem'
 import { isAdminWallet } from '@/lib/admin'
 import { siws } from '@/lib/auth/siws'
 import { AffiliateRepository } from '@/lib/db/queries/affiliate'
 import { isSolanaAddress, verifySignInSignature } from '@/lib/solana/auth'
 import { db } from '@/lib/drizzle'
-import { reownProjectId } from '@/lib/reown-project-id'
 import resolveSiteUrl from '@/lib/site-url'
 import { getPublicAssetUrl } from '@/lib/storage'
 import { DEFAULT_THEME_SITE_NAME } from '@/lib/theme-site-identity'
@@ -262,26 +259,12 @@ export const auth = betterAuth({
       anonymous: true,
       getNonce: async () => generateRandomString(32),
       verifyMessage: async ({ message, signature, address }) => {
-        // Solana (SIWS): base58 ed25519 pubkey rather than an 0x EVM address.
+        // Solana-only (SIWS): base58 ed25519 pubkey. EVM SIWE on-chain
+        // verification (viem/reown) is removed.
         if (isSolanaAddress(address)) {
           return verifySignInSignature({ message, signature, address })
         }
-
-        const chainId = getChainIdFromMessage(message)
-
-        const publicClient = createPublicClient(
-          {
-            transport: http(
-              `https://rpc.walletconnect.org/v1/?chainId=${chainId}&projectId=${reownProjectId}`,
-            ),
-          },
-        )
-
-        return await publicClient.verifyMessage({
-          message,
-          address: address as `0x${string}`,
-          signature: signature as `0x${string}`,
-        })
+        return false
       },
     }),
     // Sign-In With Solana — base58-aware companion to the EVM-only siwe plugin.

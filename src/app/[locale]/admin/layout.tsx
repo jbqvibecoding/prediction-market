@@ -6,7 +6,6 @@ import PlatformViewerState from '@/app/[locale]/(platform)/_components/PlatformV
 import AdminHeader from '@/app/[locale]/admin/_components/AdminHeader'
 import AdminSidebar from '@/app/[locale]/admin/_components/AdminSidebar'
 import CopyVersion from '@/app/[locale]/admin/_components/CopyVersion'
-import AppKitProvider from '@/providers/AppKitProvider'
 import { SolanaWalletProvider } from '@/lib/solana/wallet-provider'
 
 export const metadata: Metadata = {
@@ -30,20 +29,18 @@ export default async function AdminLayout({ params, children }: LayoutProps<'/[l
   const forkRepositoryUrl = getForkRepositoryUrl()
 
   return (
-    <AppKitProvider>
-      <SolanaWalletProvider>
-        <PlatformViewerState />
-        <AdminHeader />
-        <main className="container py-4 lg:py-8">
-          <div className="grid gap-8 lg:grid-cols-[200px_1fr] lg:gap-16">
-            <AdminSidebar />
-            <div className="space-y-8">
-              {children}
-            </div>
+    <SolanaWalletProvider>
+      <PlatformViewerState />
+      <AdminHeader />
+      <main className="container py-4 lg:py-8">
+        <div className="grid gap-8 lg:grid-cols-[200px_1fr] lg:gap-16">
+          <AdminSidebar />
+          <div className="space-y-8">
+            {children}
           </div>
-          <CopyVersion forkRepositoryUrl={forkRepositoryUrl} />
-        </main>
-      </SolanaWalletProvider>
-    </AppKitProvider>
+        </div>
+        <CopyVersion forkRepositoryUrl={forkRepositoryUrl} />
+      </main>
+    </SolanaWalletProvider>
   )
 }
