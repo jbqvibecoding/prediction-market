@@ -86,16 +86,15 @@ export function stringToHex(value: string, opts?: { size?: number }): Hex {
   return bytesToHex(bytes)
 }
 
-/** Alias kept for viem call-site compatibility (string|number -> hex). */
+/**
+ * Alias kept for viem call-site compatibility. Strings encode as UTF-8 bytes;
+ * numbers/bigints encode as minimal JSON-RPC quantities (viem: toHex(0n) === '0x0').
+ */
 export function toHex(value: string | number | bigint): Hex {
   if (typeof value === 'string') {
     return stringToHex(value)
   }
-  let hex = value.toString(16)
-  if (hex.length % 2) {
-    hex = `0${hex}`
-  }
-  return `0x${hex}` as Hex
+  return `0x${value.toString(16)}` as Hex
 }
 
 /** EIP-55 checksummed address. Throws on malformed input, matching viem. */

@@ -20,8 +20,15 @@ vi.mock('@tanstack/react-query', () => ({
   useInfiniteQuery: (options: any) => mocks.useInfiniteQuery(options),
 }))
 
-vi.mock('@reown/appkit/react', () => ({
-  useAppKitAccount: () => ({ isConnected: true }),
+vi.mock('@/hooks/useWalletConnection', () => ({
+  useWalletConnection: () => ({
+    isConnected: true,
+    address: 'So1anaTestWa11etAddress111111111111111111111',
+    open: vi.fn(),
+    disconnect: vi.fn(),
+    walletName: undefined,
+    walletIcon: undefined,
+  }),
 }))
 
 vi.mock('next-intl', () => ({

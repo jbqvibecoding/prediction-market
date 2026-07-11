@@ -1,5 +1,13 @@
-import { privateKeyToAccount } from 'viem/accounts'
+import { secp256k1 } from '@noble/curves/secp256k1'
+import { keccak256 } from '@/lib/eth-utils'
 import 'server-only'
+
+/** Derive the (lowercase) EVM address of a secp256k1 private key, viem-free. */
+function privateKeyToEvmAddress(privateKey: `0x${string}`): string {
+  const publicKey = secp256k1.getPublicKey(privateKey.slice(2), false)
+  const hash = keccak256(publicKey.subarray(1))
+  return `0x${hash.slice(-40)}`
+}
 
 export interface EventCreationSigner {
   address: string
@@ -44,9 +52,9 @@ export function parseEventCreationSignerPrivateKeys(input: string | undefined | 
       continue
     }
 
-    const account = privateKeyToAccount(privateKey)
-    signers.set(account.address.toLowerCase(), {
-      address: account.address.toLowerCase(),
+    const address = privateKeyToEvmAddress(privateKey)
+    signers.set(address, {
+      address,
       privateKey,
     })
   }

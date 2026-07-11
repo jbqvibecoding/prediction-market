@@ -116,7 +116,9 @@ describe('settingsProfileContent', () => {
     process.env.COMMUNITY_URL = 'https://community.example'
   })
 
-  it('does not persist a community avatar_url on username-only saves', async () => {
+  it('saves the username locally without a community sync request', async () => {
+    // Solana: community profile sync (EVM message signing) is disabled — a
+    // username-only save persists locally and never POSTs to the community API.
     const user = userEvent.setup()
     render(<SettingsProfileContent user={createUser()} />)
 
@@ -132,12 +134,9 @@ describe('settingsProfileContent', () => {
     const communityRequest = mocks.fetch.mock.calls.find(([, init]) => {
       return (init as RequestInit | undefined)?.method === 'POST'
     })?.[1] as RequestInit | undefined
-    expect(communityRequest).toBeDefined()
-    const communityForm = communityRequest!.body as FormData
+    expect(communityRequest).toBeUndefined()
     const localForm = mocks.updateUserAction.mock.calls[0][0] as FormData
 
-    expect(communityForm.get('username')).toBe('newname')
-    expect(communityForm.get('image')).toBeNull()
     expect(localForm.get('username')).toBe('newname')
     expect(localForm.get('avatar_url')).toBeNull()
     const updateUserState = mocks.setUserState.mock.calls[0][0] as (previous: User | null) => User | null

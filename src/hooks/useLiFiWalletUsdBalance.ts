@@ -1,4 +1,16 @@
-import type { TokensExtendedResponse, WalletTokenExtended } from '@lifi/sdk'
+// Solana: local minimal types replacing @lifi/sdk (bridge disabled).
+interface WalletTokenExtended {
+  address: string
+  symbol: string
+  name?: string
+  decimals: number | string
+  amount: string
+  priceUSD?: string | number
+  logoURI?: string
+}
+interface TokensExtendedResponse {
+  tokens: Record<string, WalletTokenExtended[]>
+}
 import { useQuery } from '@tanstack/react-query'
 import { formatUnits } from '@/lib/eth-utils'
 

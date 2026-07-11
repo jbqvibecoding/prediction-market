@@ -1,19 +1,6 @@
-import { getChains } from '@lifi/sdk'
 import { NextResponse } from 'next/server'
-import { ensureLiFiServerConfig } from '@/lib/lifi'
-import { deferPublicShellPrerenderIfNeeded } from '@/lib/public-shell-rendering'
 
+// Solana: the LiFi cross-chain bridge is disabled (no Solana funding path).
 export async function GET() {
-  await deferPublicShellPrerenderIfNeeded()
-
-  await ensureLiFiServerConfig()
-
-  try {
-    const chains = await getChains()
-    return NextResponse.json({ chains })
-  }
-  catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch LI.FI chains.'
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
+  return NextResponse.json({ chains: [] })
 }
