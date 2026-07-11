@@ -89,7 +89,51 @@ export interface ConditionChangeLogEntry {
   new_values: Record<string, unknown>
 }
 
+/** Discriminates the two market protocols: CTF (order-book + conditional tokens) vs spark (bonding-curve event futures). */
+export type MarketType = 'ctf' | 'spark'
+
+/** One outcome pool of a spark market (power-curve priced SPL mint). */
+export interface SparkOutcome {
+  index: number
+  label: string
+  /** base58 outcome SPL mint */
+  mint: string
+  /** base-unit outcome token supply */
+  currentSupply: string
+  /** base-unit USDC locked in this outcome's curve */
+  usdcInCurve: string
+}
+
+/**
+ * On-chain config of a spark (event-futures) market: outcome tokens are minted
+ * and redeemed along the power curve P(s) = m·s^n; settlement is parimutuel.
+ */
+export interface SparkMarketConfig {
+  /** u64 market id (decimal string) — the PDA seed */
+  marketId: string
+  outcomeCount: number
+  /** curve params: m = mNum/mDen, n = nNum/nDen (MVP uses integer n) */
+  curve: {
+    mNum: string
+    mDen: string
+    nNum: string
+    nDen: string
+  }
+  /** base58 USDC vault token account */
+  vault?: string
+  /** base-unit totals across all outcomes */
+  totalUsdcDeposited: string
+  totalFeesCollected: string
+  status: 'active' | 'proposal_pending' | 'resolved' | 'cancelled'
+  winningOutcome?: number | null
+  outcomes: SparkOutcome[]
+}
+
 export interface Market {
+  /** absent = 'ctf' (all pre-spark markets are CTF) */
+  market_type?: MarketType
+  /** present only when market_type === 'spark' */
+  spark?: SparkMarketConfig
   condition_id: string
   question_id: string
   event_id: string
